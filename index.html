@@ -1,0 +1,1331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>sSLudGe</title>
+  <link rel="icon" href="ssludge.png" type="image/png">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400&display=swap" rel="stylesheet">
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      box-sizing: border-box;
+    }
+
+    body {
+      display: block;
+      background-color: #000;
+      background-image: radial-gradient(
+        115% 88% at 50% 46%,
+        #07090c 0%,
+        #030405 52%,
+        #000 100%
+      );
+      overflow: hidden;
+      min-height: 100%;
+      will-change: transform, filter;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      opacity: 0.32;
+      background:
+        repeating-linear-gradient(
+          90deg,
+          rgba(255, 255, 255, 0.012) 0,
+          rgba(255, 255, 255, 0.012) 1px,
+          transparent 1px,
+          transparent 3px
+        ),
+        repeating-linear-gradient(
+          0deg,
+          rgba(255, 255, 255, 0.008) 0,
+          rgba(255, 255, 255, 0.008) 1px,
+          transparent 1px,
+          transparent 4px
+        );
+    }
+
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: 1;
+      pointer-events: none;
+      opacity: 0.14;
+      background: repeating-linear-gradient(
+        0deg,
+        rgba(0, 0, 0, 0.28) 0,
+        rgba(0, 0, 0, 0.28) 1px,
+        transparent 1px,
+        transparent 3px
+      );
+      box-shadow: inset 0 0 140px rgba(0, 0, 0, 0.72);
+    }
+
+    body.is-screen-glitching::before {
+      opacity: 0.62;
+    }
+
+    body.is-screen-glitching::after {
+      opacity: 0.34;
+    }
+
+    h1 {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      margin: -1px;
+      padding: 0;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: pre;
+      border: 0;
+    }
+
+    a.title {
+      display: block;
+      position: fixed;
+      z-index: 2;
+      left: 50%;
+      width: 1100px;
+      margin: 0;
+      transform: translateX(-50%);
+      cursor: pointer;
+      text-decoration: none;
+    }
+
+    a.title canvas {
+      display: block;
+      width: 1100px;
+      height: 260px;
+    }
+
+    .vcr-dock {
+      position: fixed;
+      z-index: 3;
+      left: 0.95rem;
+      right: 0.95rem;
+      bottom: 2.05rem;
+      overflow: hidden;
+    }
+
+    .vcr-dock-inner {
+      position: relative;
+      z-index: 1;
+      display: block;
+    }
+
+    .vcr-dock-inner .vcr-time,
+    .vcr-dock-inner .vcr-date,
+    .vcr-dock-inner .vcr-mute,
+    .vcr-dock-inner .vcr-sludge,
+    .vcr-dock-inner .vcr-brand {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      margin: 0;
+    }
+
+    .vcr-dock-bar {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 100%;
+      height: auto;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+
+    .vcr-mute {
+      padding: 0;
+      border: 0;
+      background: none;
+      cursor: pointer;
+    }
+
+    .vcr-mute canvas,
+    .vcr-brand canvas,
+    .vcr-time canvas,
+    .vcr-date canvas,
+    .vcr-sludge canvas {
+      display: block;
+    }
+
+    .vcr-sludge {
+      pointer-events: none;
+    }
+
+    .vcr-time,
+    .vcr-date {
+      pointer-events: none;
+    }
+
+    .vcr-brand {
+      pointer-events: none;
+    }
+
+    .vcr-mute-sr {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      margin: -1px;
+      padding: 0;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    .vcr-mute:focus-visible {
+      outline: 1px solid rgba(255, 255, 255, 0.45);
+      outline-offset: 3px;
+    }
+  </style>
+</head>
+<body>
+  <nav class="vcr-dock" aria-label="Status">
+    <canvas id="dock-bar-tv" class="vcr-dock-bar" aria-hidden="true"></canvas>
+    <div class="vcr-dock-inner">
+      <div class="vcr-time">
+        <canvas id="time-tv" aria-hidden="true"></canvas>
+      </div>
+      <div class="vcr-date">
+        <canvas id="date-tv" aria-hidden="true"></canvas>
+      </div>
+      <button type="button" class="vcr-mute" id="mute" aria-pressed="false">
+        <canvas id="mute-tv" aria-hidden="true"></canvas>
+        <span class="vcr-mute-sr" id="mute-label">Unmute</span>
+      </button>
+      <div class="vcr-sludge" aria-hidden="true">
+        <canvas id="sludge-tv"></canvas>
+      </div>
+      <div class="vcr-brand">
+        <canvas id="brand-tv" aria-hidden="true"></canvas>
+      </div>
+    </div>
+  </nav>
+  <audio id="bgm" preload="none" hidden></audio>
+  <a class="title" href="https://www.instagram.com/vsebee/" target="_blank" rel="noopener noreferrer">
+    <h1>Xopowo Бесконечность8</h1>
+    <canvas id="tv" width="1100" height="260" aria-hidden="true"></canvas>
+  </a>
+  <script>
+    const slides = [
+      { artist: "Xopowo", song: "Бесконечность8", href: "#" },
+      { artist: "Madd Rod, Altered View", song: "Dead Man Walking", href: "#" },
+      { artist: "Phase Fatale", song: "Velvet Imprints", href: "#" },
+      { artist: "Die Sexual", song: "Darkest Hour", href: "#" },
+      { artist: "Teatre", song: "Surrender", href: "#" },
+      { artist: "Panther Modern", song: "Tasting Static", href: "#" },
+      { artist: "Potochkine", song: "Endorphines", href: "#" },
+      { artist: "SARIN, Scarlit Port", song: "PIROOZI", href: "#" },
+      { artist: "Years Of Denial", song: "AI Lover", href: "#" },
+      { artist: "Primary", song: "Scanner", href: "#" },
+      { artist: "Koloah", song: "Graduate", href: "#" },
+      { artist: "Special Interest, Boy Harsher", song: "Street Pulse Beat (Boy Harsher Remix)", href: "#" },
+      { artist: "Human Performance Lab", song: "Achievement", href: "#" }
+    ];
+    const link = document.querySelector("a.title");
+    const heading = document.querySelector("h1");
+    let slideIndex = 0;
+    let artistText = slides[0].artist.toUpperCase();
+    let songText = slides[0].song.toUpperCase();
+    let titleDisplayText = "";
+
+    const SLIDE_HOLD_MS = 8000;
+    const SLIDE_GAP_MIN_MS = 3700;
+    const SLIDE_GAP_MAX_MS = 4000;
+    const TITLE_GLITCH_MIN_MS = 12000;
+    const TITLE_GLITCH_MAX_MS = 15000;
+    const SCREEN_GLITCH_MIN_MS = 39000;
+    const SCREEN_GLITCH_MAX_MS = 87000;
+    let slideCycleTimer = null;
+    let titleGlitchTimer = null;
+    let screenGlitchTimer = null;
+    let screenGlitchBurstActive = false;
+    let screenGlitchBurstStart = 0;
+    let screenGlitchBurstDuration = 0;
+    let screenGlitchIntensity = 0;
+    let titleGlitchBurstActive = false;
+    let titleGlitchBurstStart = 0;
+    let titleGlitchBurstDuration = 0;
+
+    function slideBlankGapMs() {
+      return SLIDE_GAP_MIN_MS + Math.random() * (SLIDE_GAP_MAX_MS - SLIDE_GAP_MIN_MS);
+    }
+
+    function clearSlideCycleTimer() {
+      if (slideCycleTimer !== null) {
+        clearTimeout(slideCycleTimer);
+        slideCycleTimer = null;
+      }
+    }
+
+    function clearTitleGlitchTimer() {
+      if (titleGlitchTimer !== null) {
+        clearTimeout(titleGlitchTimer);
+        titleGlitchTimer = null;
+      }
+    }
+
+    function titleGlitchIntervalMs() {
+      return TITLE_GLITCH_MIN_MS + Math.random() * (TITLE_GLITCH_MAX_MS - TITLE_GLITCH_MIN_MS);
+    }
+
+    function beginTitleGlitchBurst() {
+      if (!titleDisplayText) return;
+      titleGlitchBurstActive = true;
+      titleGlitchBurstStart = performance.now();
+      titleGlitchBurstDuration = 380 + Math.random() * 520;
+    }
+
+    function scheduleTitleGlitch() {
+      clearTitleGlitchTimer();
+      titleGlitchTimer = setTimeout(() => {
+        beginTitleGlitchBurst();
+        scheduleTitleGlitch();
+      }, titleGlitchIntervalMs());
+    }
+
+    function screenGlitchIntervalMs() {
+      return SCREEN_GLITCH_MIN_MS + Math.random() * (SCREEN_GLITCH_MAX_MS - SCREEN_GLITCH_MIN_MS);
+    }
+
+    function clearScreenGlitchTimer() {
+      if (screenGlitchTimer !== null) {
+        clearTimeout(screenGlitchTimer);
+        screenGlitchTimer = null;
+      }
+    }
+
+    function beginScreenGlitchBurst() {
+      screenGlitchBurstActive = true;
+      screenGlitchBurstStart = performance.now();
+      screenGlitchBurstDuration = 30 + Math.random() * 60;
+    }
+
+    function scheduleScreenGlitch() {
+      clearScreenGlitchTimer();
+      screenGlitchTimer = setTimeout(() => {
+        beginScreenGlitchBurst();
+        scheduleScreenGlitch();
+      }, screenGlitchIntervalMs());
+    }
+
+    function screenGlitchStrength(now) {
+      if (!screenGlitchBurstActive) return 0;
+      const elapsed = now - screenGlitchBurstStart;
+      if (elapsed >= screenGlitchBurstDuration) {
+        screenGlitchBurstActive = false;
+        return 0;
+      }
+      return 1;
+    }
+
+    function applyScreenGlitchVisual(now) {
+      const strength = screenGlitchStrength(now);
+      screenGlitchIntensity = strength;
+      if (strength <= 0) {
+        document.body.classList.remove("is-screen-glitching");
+        document.body.style.filter = "";
+        document.body.style.transform = "";
+        return;
+      }
+      document.body.classList.add("is-screen-glitching");
+      const shake = strength * 16;
+      const dx = (Math.random() - 0.5) * shake;
+      const dy = (Math.random() - 0.5) * shake * 0.7;
+      const blur = strength * (1.6 + Math.random() * 3.2);
+      const skew = (Math.random() - 0.5) * 2.8 * strength;
+      const hue = (Math.random() - 0.5) * 14 * strength;
+      const scaleX = 1 + (Math.random() - 0.5) * 0.035 * strength;
+      document.body.style.filter =
+        `blur(${blur}px) contrast(${1 + strength * 0.5}) brightness(${1 + strength * 0.06}) hue-rotate(${hue}deg)`;
+      document.body.style.transform =
+        `translate3d(${dx}px, ${dy}px, 0) skewX(${skew}deg) scaleX(${scaleX})`;
+    }
+
+    function screenGlitchSoft() {
+      return screenGlitchIntensity < 0.12;
+    }
+
+    function screenGlitchLoop() {
+      applyScreenGlitchVisual(performance.now());
+      requestAnimationFrame(screenGlitchLoop);
+    }
+
+    function titleGlitchPhase(now) {
+      if (!titleGlitchBurstActive || !titleDisplayText) return "normal";
+      const elapsed = now - titleGlitchBurstStart;
+      if (elapsed >= titleGlitchBurstDuration) {
+        titleGlitchBurstActive = false;
+        return "normal";
+      }
+      const r = elapsed / titleGlitchBurstDuration;
+      if (r < 0.38) return "distort";
+      if (r < 0.72) return "hidden";
+      return "recover";
+    }
+
+    function clearSlideText() {
+      clearSlideCycleTimer();
+      artistText = "";
+      songText = "";
+      titleDisplayText = "";
+      heading.textContent = "";
+    }
+
+    function showSlide(index) {
+      slideIndex = index;
+      const slide = slides[slideIndex];
+      artistText = slide.artist.toUpperCase();
+      songText = slide.song.toUpperCase();
+      link.href = slide.href;
+    }
+
+    function presentSlide() {
+      clearSlideCycleTimer();
+      const fullLine = titleLineText(artistText, songText);
+      titleDisplayText = fullLine;
+      heading.textContent = fullLine;
+
+      slideCycleTimer = setTimeout(() => {
+        clearSlideText();
+        slideCycleTimer = setTimeout(() => {
+          showSlide((slideIndex + 1) % slides.length);
+          presentSlide();
+        }, slideBlankGapMs());
+      }, SLIDE_HOLD_MS);
+    }
+
+    function beginSlideShow() {
+      showSlide(0);
+      presentSlide();
+      scheduleTitleGlitch();
+      scheduleScreenGlitch();
+    }
+
+    const colors = {
+      white: "rgba(205, 255, 228, 0.96)",
+      red: "rgba(120, 185, 155, 0.14)",
+      cyan: "rgba(105, 200, 170, 0.11)"
+    };
+
+    const hudGrayColors = {
+      white: "rgba(178, 186, 192, 0.96)",
+      red: "rgba(165, 172, 178, 0.07)",
+      cyan: "rgba(168, 178, 186, 0.09)"
+    };
+
+    const hudPanel = {
+      fill: "rgba(18, 20, 24, 0.97)",
+      border: "rgba(38, 40, 46, 0.72)"
+    };
+
+    const titleColors = {
+      white: "rgba(255, 108, 108, 0.98)",
+      red: "rgba(230, 70, 70, 0.14)",
+      cyan: "rgba(255, 140, 120, 0.1)"
+    };
+
+    const titlePanel = {
+      fill: "rgba(58, 14, 18, 0.97)",
+      border: "rgba(118, 36, 44, 0.8)"
+    };
+
+    const mutePanel = {
+      fill: "rgba(48, 38, 6, 0.97)",
+      border: "rgba(130, 100, 28, 0.82)"
+    };
+
+    function makeLayerSetFrom(palette) {
+      const set = {};
+      for (const name of Object.keys(palette)) {
+        set[name] = document.createElement("canvas");
+      }
+      return set;
+    }
+
+    function makeLayerSet() {
+      return makeLayerSetFrom(colors);
+    }
+
+    const SLUDGE_LABEL = "sSLudGe";
+
+    const canvas = document.getElementById("tv");
+    const ctx = canvas.getContext("2d");
+    const layers = makeLayerSet();
+    const muteCanvas = document.getElementById("mute-tv");
+    const muteCtx = muteCanvas.getContext("2d");
+    const muteLayers = makeLayerSet();
+    const timeCanvas = document.getElementById("time-tv");
+    const timeCtx = timeCanvas.getContext("2d");
+    const timeLayers = makeLayerSet();
+    const dateCanvas = document.getElementById("date-tv");
+    const dateCtx = dateCanvas.getContext("2d");
+    const dateLayers = makeLayerSet();
+    let datetimeTimeText = "AM 12:00";
+    let datetimeDateText = "JAN.01 2000";
+    let datetimeLastTick = -1;
+
+    const dockBarCanvas = document.getElementById("dock-bar-tv");
+    const dockBarCtx = dockBarCanvas.getContext("2d");
+    const dockBarLayers = makeLayerSet();
+    const brandCanvas = document.getElementById("brand-tv");
+    const brandCtx = brandCanvas.getContext("2d");
+    const brandLayers = makeLayerSet();
+    const sludgeCanvas = document.getElementById("sludge-tv");
+    const sludgeCtx = sludgeCanvas.getContext("2d");
+    const sludgeLayers = makeLayerSet();
+    let audioMuted = true;
+    const PLAY_VISIBLE_MS = 600;
+    const PLAY_HIDDEN_MS = 300;
+    const DOT_SIZE_SCALES = [0.25, 0.5, 1];
+
+    const titleFont = '"IBM Plex Mono", monospace';
+    const TITLE_LETTER_SPACING = "0.11em";
+    const HUD_LETTER_SPACING = "0.09em";
+    let fontSize = 16;
+    let hudFontSize = 12;
+    let muteLabelText = "Unmute";
+    const HUD_ITEM_GAP_PX = 75;
+    let dockLayoutFrozen = false;
+    let frozenDockInnerWidth = 0;
+    let frozenSlotLeft = { time: 0, date: 0, mute: 0, sludge: 0, brand: 0 };
+    let frozenMuteBar = { left: 0, width: 0 };
+
+    function fontOf(size) {
+      return `400 ${size}px ${titleFont}`;
+    }
+
+    function hudPanelInsets(size) {
+      return {
+        x: Math.max(3, Math.round(size * 0.18)),
+        y: Math.max(2, Math.round(size * 0.09))
+      };
+    }
+
+    function drawHudHighlight(bctx, x, y, w, h, panel = hudPanel) {
+      bctx.fillStyle = panel.fill;
+      bctx.fillRect(x, y, w, h);
+    }
+
+    function drawLabeledLine(bctx, text, textX, baselineY, metrics, size, fillStyle, panel = hudPanel, drawPanel = true) {
+      const inset = hudPanelInsets(size);
+      if (drawPanel) {
+        const barW = metrics.width + inset.x * 2;
+        const barH = metrics.height + inset.y * 2;
+        const barX = textX - inset.x;
+        const barY = baselineY - metrics.ascent - inset.y;
+        drawHudHighlight(bctx, barX, barY, barW, barH, panel);
+      }
+      bctx.fillStyle = fillStyle;
+      bctx.fillText(text, textX, baselineY);
+    }
+
+    function muteIconCells(muted) {
+      const body = [
+        [1, 2], [1, 3], [1, 4],
+        [2, 1], [2, 2], [2, 3], [2, 4], [2, 5],
+        [3, 0], [3, 1], [3, 2], [3, 3], [3, 4], [3, 5],
+        [4, 0], [4, 1], [4, 2], [4, 3], [4, 4], [4, 5],
+        [5, 1], [5, 2], [5, 3], [5, 4]
+      ];
+      const waves = [[7, 2], [8, 2], [9, 2], [7, 3], [8, 3], [9, 3], [10, 3], [8, 4], [9, 4]];
+      const strike = [[7, 1], [8, 2], [9, 3], [10, 4], [10, 1], [9, 2], [8, 3], [7, 4]];
+      return muted ? body.concat(strike) : body.concat(waves);
+    }
+
+    function pixelIconMetrics(cells) {
+      let minGx = Infinity;
+      let maxGx = -Infinity;
+      let minGy = Infinity;
+      let maxGy = -Infinity;
+      for (const [gx, gy] of cells) {
+        minGx = Math.min(minGx, gx);
+        maxGx = Math.max(maxGx, gx);
+        minGy = Math.min(minGy, gy);
+        maxGy = Math.max(maxGy, gy);
+      }
+      return { minGx, maxGx, minGy, maxGy, cols: maxGx - minGx + 1, rows: maxGy - minGy + 1 };
+    }
+
+    function muteIconMetrics(muted) {
+      return pixelIconMetrics(muteIconCells(muted));
+    }
+
+    const vcrMonths = [
+      "JAN.", "FEB.", "MAR.", "APR.", "MAY.", "JUN.",
+      "JUL.", "AUG.", "SEP.", "OCT.", "NOV.", "DEC."
+    ];
+
+    function vcrTimeLabel() {
+      const now = new Date();
+      const h = now.getHours();
+      const ampm = h >= 12 ? "PM" : "AM";
+      const hour12 = h % 12 || 12;
+      const mm = String(now.getMinutes()).padStart(2, "0");
+      const ss = String(now.getSeconds()).padStart(2, "0");
+      return `${ampm} ${hour12}:${mm}:${ss}`;
+    }
+
+    function vcrDateLabel() {
+      const now = new Date();
+      const mon = vcrMonths[now.getMonth()];
+      const day = String(now.getDate()).padStart(2, "0");
+      return `${mon}${day} ${now.getFullYear()}`;
+    }
+
+    function widestHudTextWidth(probe, labels) {
+      let maxW = 0;
+      for (const label of labels) {
+        maxW = Math.max(maxW, muteTextMetrics(probe, label).width);
+      }
+      return maxW;
+    }
+
+    function timeCanvasSampleLabels() {
+      return ["AM 1:59:59", "PM 12:59:59"];
+    }
+
+    function dateCanvasSampleLabels() {
+      const year = new Date().getFullYear();
+      return vcrMonths.map((mon) => `${mon}29 ${year}`);
+    }
+
+    function syncDatetimeClock() {
+      const now = new Date();
+      const tick = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+      if (tick === datetimeLastTick) return;
+      datetimeLastTick = tick;
+      datetimeTimeText = vcrTimeLabel();
+      datetimeDateText = vcrDateLabel();
+      if (!dockLayoutFrozen) {
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        resizeTimeCanvas(dpr);
+        resizeDateCanvas(dpr);
+      }
+    }
+
+    function muteTextMetrics(bctx, label, size = hudFontSize, letterSpacing = HUD_LETTER_SPACING) {
+      bctx.font = fontOf(size);
+      bctx.letterSpacing = letterSpacing;
+      const metrics = bctx.measureText(label);
+      const ascent = Math.max(metrics.actualBoundingBoxAscent || 0, size * 0.78);
+      const descent = Math.max(metrics.actualBoundingBoxDescent || 0, size * 0.3);
+      return {
+        width: metrics.width,
+        ascent,
+        descent,
+        height: ascent + descent,
+        gap: bctx.measureText(" ").width,
+        baselineForMid(midY) {
+          return midY + (ascent - descent) / 2;
+        }
+      };
+    }
+
+    function brandDotState(now) {
+      const flashPeriod = PLAY_VISIBLE_MS + PLAY_HIDDEN_MS;
+      const flashIndex = Math.floor(now / flashPeriod) % DOT_SIZE_SCALES.length;
+      const visible = now % flashPeriod < PLAY_VISIBLE_MS;
+      return { visible, scale: DOT_SIZE_SCALES[flashIndex] };
+    }
+
+    function drawIconLabelMark(bctx, ox, canvasH, cell, fillStyle, iconCells, label, showIcon = true, panel = hudPanel, drawPanel = true) {
+      bctx.letterSpacing = HUD_LETTER_SPACING;
+      bctx.font = fontOf(hudFontSize);
+
+      const { minGx, maxGx, minGy, maxGy } = pixelIconMetrics(iconCells);
+      const iconW = (maxGx - minGx + 1) * cell;
+      const rowY = canvasH / 2;
+      const avgGy = iconCells.reduce((sum, [, gy]) => sum + gy, 0) / iconCells.length;
+      const iconMidOffset = (avgGy - minGy + 0.5) * cell;
+      const iconTop = rowY - iconMidOffset;
+      const text = muteTextMetrics(bctx, label);
+      const textX = ox + iconW + text.gap;
+      const iconH = (maxGy - minGy + 1) * cell;
+      const rowH = Math.max(iconH, text.height);
+      const inset = hudPanelInsets(hudFontSize);
+      const contentW = (showIcon ? iconW + text.gap : 0) + text.width;
+      if (drawPanel) {
+        const barW = contentW + inset.x * 2;
+        const barH = rowH + inset.y * 2;
+        const barX = ox - inset.x;
+        const barY = rowY - rowH / 2 - inset.y;
+        drawHudHighlight(bctx, barX, barY, barW, barH, panel);
+      }
+
+      bctx.fillStyle = fillStyle;
+      if (showIcon) {
+        for (const [gx, gy] of iconCells) {
+          bctx.fillRect(
+            ox + (gx - minGx) * cell,
+            iconTop + (gy - minGy) * cell,
+            cell - 0.6,
+            cell - 0.6
+          );
+        }
+      }
+
+      bctx.textAlign = "left";
+      bctx.textBaseline = "alphabetic";
+      bctx.fillText(label, textX, text.baselineForMid(rowY));
+    }
+
+    function iconLabelBoxWidth(iconCells, label) {
+      const probe = layers.white.getContext("2d");
+      const cell = hudFontSize * 0.12;
+      const { minGx, maxGx } = pixelIconMetrics(iconCells);
+      const iconW = (maxGx - minGx + 1) * cell;
+      const text = muteTextMetrics(probe, label);
+      const pad = hudFontSize * 0.28;
+      return pad + iconW + text.gap + text.width + pad;
+    }
+
+    function dockRowCanvasHeight(label, muted) {
+      return Math.ceil(muteContentHeight(label, muted));
+    }
+
+    function brandDotBoxMetrics(rowH) {
+      const probe = layers.white.getContext("2d");
+      const text = muteTextMetrics(probe, "0");
+      const inset = hudPanelInsets(hudFontSize);
+      const margin = 1;
+      const inner = text.height;
+      const dotR = text.height * 0.36;
+      const w = margin * 2 + inset.x * 2 + inner;
+      const h = rowH;
+      return { w, h, margin, inset, inner, dotR };
+    }
+
+    function hudTextBoxMetrics(rowH, label, minWidth = 0) {
+      const probe = layers.white.getContext("2d");
+      probe.letterSpacing = HUD_LETTER_SPACING;
+      probe.font = fontOf(hudFontSize);
+      const line = muteTextMetrics(probe, label);
+      const inset = hudPanelInsets(hudFontSize);
+      const margin = 1;
+      const textW = Math.max(line.width, minWidth);
+      const w = margin * 2 + inset.x * 2 + textW;
+      const h = rowH;
+      return { w, h, margin, inset, line, textW };
+    }
+
+    function resizeTimeCanvas(dpr) {
+      const rowH = dockRowCanvasHeight(muteLabelText, audioMuted);
+      const probe = layers.white.getContext("2d");
+      const minW = widestHudTextWidth(probe, timeCanvasSampleLabels());
+      const { w, h } = hudTextBoxMetrics(rowH, datetimeTimeText, minW);
+      timeCanvas.width = Math.ceil(w);
+      timeCanvas.height = Math.ceil(h);
+      timeCanvas.style.width = `${w / dpr}px`;
+      timeCanvas.style.height = `${h / dpr}px`;
+      for (const layer of Object.values(timeLayers)) {
+        layer.width = timeCanvas.width;
+        layer.height = timeCanvas.height;
+      }
+    }
+
+    function resizeDateCanvas(dpr) {
+      const rowH = dockRowCanvasHeight(muteLabelText, audioMuted);
+      const probe = layers.white.getContext("2d");
+      const minW = widestHudTextWidth(probe, dateCanvasSampleLabels());
+      const { w, h } = hudTextBoxMetrics(rowH, datetimeDateText, minW);
+      dateCanvas.width = Math.ceil(w);
+      dateCanvas.height = Math.ceil(h);
+      dateCanvas.style.width = `${w / dpr}px`;
+      dateCanvas.style.height = `${h / dpr}px`;
+      for (const layer of Object.values(dateLayers)) {
+        layer.width = dateCanvas.width;
+        layer.height = dateCanvas.height;
+      }
+    }
+
+    function resizeBrandCanvas(dpr) {
+      const rowH = dockRowCanvasHeight(muteLabelText, audioMuted);
+      const { w, h } = brandDotBoxMetrics(rowH);
+      brandCanvas.width = Math.ceil(w);
+      brandCanvas.height = Math.ceil(h);
+      brandCanvas.style.width = `${w / dpr}px`;
+      brandCanvas.style.height = `${h / dpr}px`;
+      for (const layer of Object.values(brandLayers)) {
+        layer.width = brandCanvas.width;
+        layer.height = brandCanvas.height;
+      }
+    }
+
+    function sludgeBoxMetrics(rowH) {
+      const probe = sludgeLayers.white.getContext("2d");
+      probe.letterSpacing = HUD_LETTER_SPACING;
+      probe.font = fontOf(hudFontSize);
+      const metrics = muteTextMetrics(probe, SLUDGE_LABEL);
+      const inset = hudPanelInsets(hudFontSize);
+      const margin = 1;
+      const w = margin * 2 + inset.x * 2 + metrics.width;
+      const h = rowH;
+      return { w, h, margin, inset, metrics };
+    }
+
+    function resizeSludgeCanvas(dpr) {
+      const rowH = dockRowCanvasHeight(muteLabelText, audioMuted);
+      const { w, h } = sludgeBoxMetrics(rowH);
+      sludgeCanvas.width = Math.ceil(w);
+      sludgeCanvas.height = Math.ceil(h);
+      sludgeCanvas.style.width = `${w / dpr}px`;
+      sludgeCanvas.style.height = `${h / dpr}px`;
+      for (const layer of Object.values(sludgeLayers)) {
+        layer.width = sludgeCanvas.width;
+        layer.height = sludgeCanvas.height;
+      }
+    }
+
+    function drawHudTextLine(bctx, box, text, fillStyle) {
+      const { margin, inset, line } = box;
+      const textX = margin + inset.x;
+      const rowY = box.h / 2;
+
+      bctx.letterSpacing = HUD_LETTER_SPACING;
+      bctx.font = fontOf(hudFontSize);
+      bctx.textAlign = "left";
+      bctx.textBaseline = "alphabetic";
+      bctx.fillStyle = fillStyle;
+      bctx.fillText(text, textX, line.baselineForMid(rowY));
+    }
+
+    function drawBrandDotMark(bctx, w, h, fillStyle, showDot, scale, box) {
+      if (!showDot) return;
+      const cx = box.margin + box.inset.x + box.inner / 2;
+      const cy = h / 2;
+      const dotR = box.dotR * scale;
+
+      bctx.fillStyle = fillStyle;
+      bctx.beginPath();
+      bctx.arc(cx, cy, dotR, 0, Math.PI * 2);
+      bctx.fill();
+    }
+
+    function drawMuteMark(bctx, ox, canvasH, cell, fillStyle, label, muted) {
+      bctx.letterSpacing = HUD_LETTER_SPACING;
+      bctx.font = fontOf(hudFontSize);
+      const panel = muted ? mutePanel : hudPanel;
+
+      drawIconLabelMark(bctx, ox, canvasH, cell, fillStyle, muteIconCells(muted), label, true, panel, false);
+    }
+
+    function layoutDockSlots(reseatChainFromMute = false) {
+      const inner = document.querySelector(".vcr-dock-inner");
+      const dock = document.querySelector(".vcr-dock");
+      const timeEl = document.querySelector(".vcr-time");
+      const dateEl = document.querySelector(".vcr-date");
+      const sludgeEl = document.querySelector(".vcr-sludge");
+      const brandEl = document.querySelector(".vcr-brand");
+      const muteEl = document.getElementById("mute");
+      if (!inner || !dock || !timeEl || !dateEl || !sludgeEl || !brandEl || !muteEl) return;
+
+      const rowH = dockRowCanvasHeight(muteLabelText, audioMuted);
+      inner.style.height = `${rowH}px`;
+
+      const setLeft = (el, leftPx) => {
+        el.style.left = `${leftPx}px`;
+        el.style.right = "auto";
+      };
+
+      const gap = HUD_ITEM_GAP_PX;
+      const row = [timeEl, dateEl, muteEl, sludgeEl, brandEl];
+
+      if (!dockLayoutFrozen) {
+        let x = 0;
+        for (const el of row) {
+          setLeft(el, x);
+          frozenSlotLeft[el.classList.contains("vcr-time") ? "time"
+            : el.classList.contains("vcr-date") ? "date"
+            : el.classList.contains("vcr-mute") ? "mute"
+            : el.classList.contains("vcr-sludge") ? "sludge"
+            : "brand"] = x;
+          x += el.offsetWidth + gap;
+        }
+        frozenDockInnerWidth = x - gap;
+        inner.style.width = `${frozenDockInnerWidth}px`;
+        inner.style.minWidth = `${frozenDockInnerWidth}px`;
+        inner.style.maxWidth = `${frozenDockInnerWidth}px`;
+        dockLayoutFrozen = true;
+      } else if (reseatChainFromMute) {
+        setLeft(timeEl, frozenSlotLeft.time);
+        setLeft(dateEl, frozenSlotLeft.date);
+        setLeft(muteEl, frozenSlotLeft.mute);
+        let x = frozenSlotLeft.mute + muteEl.offsetWidth + gap;
+        setLeft(sludgeEl, x);
+        frozenSlotLeft.sludge = x;
+        x += sludgeEl.offsetWidth + gap;
+        setLeft(brandEl, x);
+        frozenSlotLeft.brand = x;
+        frozenDockInnerWidth = x + brandEl.offsetWidth;
+        inner.style.width = `${frozenDockInnerWidth}px`;
+        inner.style.minWidth = `${frozenDockInnerWidth}px`;
+        inner.style.maxWidth = `${frozenDockInnerWidth}px`;
+      } else {
+        setLeft(timeEl, frozenSlotLeft.time);
+        setLeft(dateEl, frozenSlotLeft.date);
+        setLeft(muteEl, frozenSlotLeft.mute);
+        setLeft(sludgeEl, frozenSlotLeft.sludge);
+        setLeft(brandEl, frozenSlotLeft.brand);
+      }
+
+      const dockRect = dock.getBoundingClientRect();
+      const muteRect = muteEl.getBoundingClientRect();
+      frozenMuteBar = {
+        left: muteRect.left - dockRect.left,
+        width: muteRect.width
+      };
+    }
+
+    function dockBarLayout(dpr) {
+      const dock = document.querySelector(".vcr-dock");
+      const cssW = dock ? dock.clientWidth : Math.max(LAYOUT_CSS_W, window.innerWidth - 30);
+      const cssH = dockRowCanvasHeight(muteLabelText, audioMuted) / dpr;
+      const muteLeft = frozenMuteBar.left;
+      const muteCssW = frozenMuteBar.width;
+      return { cssW, cssH, muteLeft, muteCssW };
+    }
+
+    function resizeDockBarCanvas(dpr) {
+      const { cssW, cssH } = dockBarLayout(dpr);
+      const w = Math.ceil(cssW * dpr);
+      const h = Math.ceil(cssH * dpr);
+      dockBarCanvas.width = w;
+      dockBarCanvas.height = h;
+      dockBarCanvas.style.width = `${cssW}px`;
+      dockBarCanvas.style.height = `${cssH}px`;
+      for (const layer of Object.values(dockBarLayers)) {
+        layer.width = w;
+        layer.height = h;
+      }
+    }
+
+    function paintDockBarLayers() {
+      const w = dockBarCanvas.width;
+      const h = dockBarCanvas.height;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const layout = dockBarLayout(dpr);
+      const muteW = Math.ceil(layout.muteCssW * dpr);
+      const muteX = Math.round(layout.muteLeft * dpr);
+
+      for (const [name, layer] of Object.entries(dockBarLayers)) {
+        const bctx = layer.getContext("2d");
+        bctx.clearRect(0, 0, w, h);
+        drawHudHighlight(bctx, 0, 0, w, h, hudPanel);
+        if (audioMuted) {
+          drawHudHighlight(bctx, muteX, 0, muteW, h, mutePanel);
+        }
+      }
+    }
+
+    function dockBarFrame() {
+      paintDockBarLayers();
+      renderGlitch(dockBarCtx, dockBarLayers, dockBarCanvas.width, dockBarCanvas.height, screenGlitchSoft());
+      requestAnimationFrame(dockBarFrame);
+    }
+
+    function muteContentWidth(label, muted) {
+      const probe = layers.white.getContext("2d");
+      const cell = hudFontSize * 0.12;
+      const { minGx, maxGx } = muteIconMetrics(muted);
+      const iconW = (maxGx - minGx + 1) * cell;
+      const text = muteTextMetrics(probe, label);
+      const inset = hudPanelInsets(hudFontSize);
+      const margin = 1;
+      return margin * 2 + inset.x * 2 + iconW + text.gap + text.width;
+    }
+
+    function muteContentHeight(label, muted) {
+      const probe = layers.white.getContext("2d");
+      const cell = hudFontSize * 0.12;
+      const { minGy, maxGy } = muteIconMetrics(muted);
+      const iconH = (maxGy - minGy + 1) * cell;
+      const text = muteTextMetrics(probe, label);
+      const inset = hudPanelInsets(hudFontSize);
+      const margin = 1;
+      return margin * 2 + inset.y * 2 + Math.max(iconH, text.height);
+    }
+
+    function resizeMuteCanvas(dpr) {
+      const h = Math.ceil(muteContentHeight(muteLabelText, audioMuted));
+      const w = Math.ceil(muteContentWidth(muteLabelText, audioMuted));
+      muteCanvas.width = w;
+      muteCanvas.height = h;
+      muteCanvas.style.width = `${w / dpr}px`;
+      muteCanvas.style.height = `${h / dpr}px`;
+      for (const layer of Object.values(muteLayers)) {
+        layer.width = w;
+        layer.height = h;
+      }
+    }
+
+    function renderGlitch(outCtx, layerSet, w, h, soft = false) {
+      outCtx.clearRect(0, 0, w, h);
+      outCtx.imageSmoothingEnabled = false;
+
+      const band = Math.max(2, Math.round(window.devicePixelRatio || 1));
+      const tearAt = Math.random() * h;
+      const tearSize = h * (0.045 + Math.random() * 0.07);
+      const tracking = Math.random() < (soft ? 0.05 : 0.16);
+
+      for (let y = 0; y < h; y += band) {
+        let dx = (Math.random() - 0.5) * (soft ? 2.5 : 6);
+        if (Math.random() < (soft ? 0.02 : 0.07)) dx += (Math.random() - 0.5) * (soft ? 8 : 24);
+        if (y > tearAt && y < tearAt + tearSize) dx += tracking ? (soft ? 8 : 22) : (soft ? 4 : 9);
+
+        const split = soft ? 1 + Math.random() * 1.1 : 2 + Math.random() * 2.5;
+        outCtx.drawImage(layerSet.red, 0, y, w, band, dx + split, y, w, band);
+        outCtx.drawImage(layerSet.cyan, 0, y, w, band, dx - split, y, w, band);
+        if (soft || Math.random() > 0.02) {
+          outCtx.drawImage(layerSet.white, 0, y, w, band, dx, y, w, band);
+        }
+      }
+
+      outCtx.globalCompositeOperation = "source-atop";
+      outCtx.fillStyle = `rgba(0, 0, 0, ${soft ? 0.22 : 0.42})`;
+      for (let y = 0; y < h; y += band * 3) outCtx.fillRect(0, y, w, 1);
+
+      outCtx.globalCompositeOperation = "destination-out";
+      const cuts = soft ? 4 : 16;
+      for (let i = 0; i < cuts; i++) {
+        outCtx.fillRect(Math.random() * w, Math.random() * h, 3 + Math.random() * (soft ? 10 : 22), 1);
+      }
+
+      outCtx.globalCompositeOperation = "source-atop";
+      const specks = soft ? 10 : 36;
+      for (let i = 0; i < specks; i++) {
+        const bright = Math.random() > 0.4;
+        outCtx.fillStyle = bright
+          ? `rgba(255, 255, 255, ${0.35 + Math.random() * 0.5})`
+          : `rgba(${160 + Math.random() * 80}, ${40 + Math.random() * 40}, 255, ${0.4 + Math.random() * 0.4})`;
+        outCtx.fillRect(Math.random() * w, (Math.random() * h) | 0, 2 + Math.random() * (soft ? 10 : 18), 1);
+      }
+
+      if (tracking && !soft) {
+        outCtx.fillStyle = "rgba(255, 255, 255, 0.35)";
+        outCtx.fillRect(0, tearAt, w, Math.max(2, tearSize * 0.18));
+      }
+
+      outCtx.globalCompositeOperation = "source-over";
+    }
+
+    function titleLineText(artist, song) {
+      if (!artist && !song) return "";
+      if (!artist) return song;
+      if (!song) return artist;
+      return `${artist}   ${song}`;
+    }
+
+    function titleLineMetrics(bctx, line, size = fontSize) {
+      if (!line) return null;
+      bctx.letterSpacing = TITLE_LETTER_SPACING;
+      bctx.font = fontOf(size);
+      const metrics = muteTextMetrics(bctx, line, size, TITLE_LETTER_SPACING);
+      const inset = hudPanelInsets(size);
+      const blockW = inset.x * 2 + metrics.width;
+      const blockH = metrics.height + inset.y * 2;
+      return { line, metrics, inset, blockW, blockH };
+    }
+
+    function titleTextMetrics(bctx, artist, song, size = fontSize) {
+      return titleLineMetrics(bctx, titleLineText(artist, song), size);
+    }
+
+    function titleBlockHeight(probe, size) {
+      probe.letterSpacing = TITLE_LETTER_SPACING;
+      probe.font = fontOf(size);
+      let tallest = 0;
+      for (const slide of slides) {
+        const { blockH } = titleTextMetrics(probe, slide.artist.toUpperCase(), slide.song.toUpperCase(), size);
+        tallest = Math.max(tallest, blockH);
+      }
+      return tallest;
+    }
+
+    function widestTitleLine(probe, size) {
+      probe.letterSpacing = TITLE_LETTER_SPACING;
+      probe.font = fontOf(size);
+      const inset = hudPanelInsets(size);
+      let widest = 0;
+      for (const slide of slides) {
+        const line = titleLineText(slide.artist.toUpperCase(), slide.song.toUpperCase());
+        const metrics = muteTextMetrics(probe, line, size, TITLE_LETTER_SPACING);
+        widest = Math.max(widest, inset.x * 2 + metrics.width);
+      }
+      return widest;
+    }
+
+    const MIN_FONT_PX = 40;
+    const LAYOUT_CSS_W = 1100;
+    const LAYOUT_TITLE_H = 260;
+    const FIXED_FONT_PX = 40;
+    const FIXED_HUD_FONT_PX = 40;
+
+    function syncHudSafeArea() {
+      document.body.style.paddingTop = "0";
+      document.body.style.paddingBottom = "0";
+    }
+
+    function syncTitleVerticalPosition() {
+      const titleEl = document.querySelector("a.title");
+      const dockBar = document.getElementById("dock-bar-tv");
+      if (!titleEl || !dockBar) return;
+      const barTop = dockBar.getBoundingClientRect().top;
+      const top = (barTop - LAYOUT_TITLE_H) / 2;
+      titleEl.style.top = `${Math.max(0, Math.round(top))}px`;
+    }
+
+    function resize() {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      fontSize = FIXED_FONT_PX;
+      hudFontSize = FIXED_HUD_FONT_PX;
+
+      canvas.width = Math.round(LAYOUT_CSS_W * dpr);
+      canvas.height = Math.round(LAYOUT_TITLE_H * dpr);
+      canvas.style.width = `${LAYOUT_CSS_W}px`;
+      canvas.style.height = `${LAYOUT_TITLE_H}px`;
+      for (const layer of Object.values(layers)) {
+        layer.width = canvas.width;
+        layer.height = canvas.height;
+      }
+
+      resizeMuteCanvas(dpr);
+      resizeTimeCanvas(dpr);
+      resizeDateCanvas(dpr);
+      resizeBrandCanvas(dpr);
+      resizeSludgeCanvas(dpr);
+      resizeDockBarCanvas(dpr);
+      layoutDockSlots();
+      syncTitleVerticalPosition();
+      syncHudSafeArea();
+    }
+
+    function paintTitleBlock(bctx, w, h, fillStyle, withGlow, midY) {
+      if (!titleDisplayText) return;
+
+      const block = titleLineMetrics(bctx, titleDisplayText);
+      if (!block) return;
+      let textX = (w - block.blockW) / 2 + block.inset.x;
+      textX = Math.max(block.inset.x, Math.min(textX, w - block.blockW - block.inset.x));
+      const blockTop = midY - block.blockH / 2;
+      const textY = blockTop + block.inset.y + block.metrics.ascent;
+
+      bctx.letterSpacing = TITLE_LETTER_SPACING;
+      bctx.font = fontOf(fontSize);
+      bctx.textAlign = "left";
+      bctx.textBaseline = "alphabetic";
+
+      drawLabeledLine(bctx, block.line, textX, textY, block.metrics, fontSize, fillStyle, titlePanel);
+    }
+
+    function paintLayers(phase = "normal") {
+      const w = canvas.width;
+      const h = canvas.height;
+      const shake =
+        phase === "distort" ? (Math.random() - 0.5) * 12 : (Math.random() - 0.5) * 0.8;
+      const midY = h * 0.5 + shake;
+
+      for (const [name, layer] of Object.entries(layers)) {
+        const bctx = layer.getContext("2d");
+        bctx.clearRect(0, 0, w, h);
+        if (phase === "hidden") continue;
+        paintTitleBlock(bctx, w, h, titleColors[name], false, midY);
+      }
+    }
+
+    function paintMuteLayers() {
+      const w = muteCanvas.width;
+      const h = muteCanvas.height;
+      const cell = hudFontSize * 0.12;
+      const inset = hudPanelInsets(hudFontSize);
+      const ox = 1 + inset.x;
+      const muteGlyphColors = audioMuted ? colors : hudGrayColors;
+      for (const [name, layer] of Object.entries(muteLayers)) {
+        const bctx = layer.getContext("2d");
+        bctx.clearRect(0, 0, w, h);
+        drawMuteMark(bctx, ox, h, cell, muteGlyphColors[name], muteLabelText, audioMuted);
+      }
+    }
+
+    function frame() {
+      const phase = titleGlitchPhase(performance.now());
+      paintLayers(phase);
+      if (phase === "hidden") {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      } else if (phase === "distort" || !screenGlitchSoft()) {
+        renderGlitch(ctx, layers, canvas.width, canvas.height, false);
+      } else {
+        renderGlitch(ctx, layers, canvas.width, canvas.height, true);
+      }
+      requestAnimationFrame(frame);
+    }
+
+    function paintTimeLayers() {
+      const w = timeCanvas.width;
+      const h = timeCanvas.height;
+      const rowH = dockRowCanvasHeight(muteLabelText, audioMuted);
+      const probe = layers.white.getContext("2d");
+      const minW = widestHudTextWidth(probe, timeCanvasSampleLabels());
+      const box = hudTextBoxMetrics(rowH, datetimeTimeText, minW);
+
+      for (const [name, layer] of Object.entries(timeLayers)) {
+        const bctx = layer.getContext("2d");
+        bctx.clearRect(0, 0, w, h);
+        drawHudTextLine(bctx, box, datetimeTimeText, hudGrayColors[name]);
+      }
+    }
+
+    function paintDateLayers() {
+      const w = dateCanvas.width;
+      const h = dateCanvas.height;
+      const rowH = dockRowCanvasHeight(muteLabelText, audioMuted);
+      const probe = layers.white.getContext("2d");
+      const minW = widestHudTextWidth(probe, dateCanvasSampleLabels());
+      const box = hudTextBoxMetrics(rowH, datetimeDateText, minW);
+
+      for (const [name, layer] of Object.entries(dateLayers)) {
+        const bctx = layer.getContext("2d");
+        bctx.clearRect(0, 0, w, h);
+        drawHudTextLine(bctx, box, datetimeDateText, hudGrayColors[name]);
+      }
+    }
+
+    function paintBrandLayers() {
+      const w = brandCanvas.width;
+      const h = brandCanvas.height;
+      const dot = brandDotState(performance.now());
+      const rowH = dockRowCanvasHeight(muteLabelText, audioMuted);
+      const box = brandDotBoxMetrics(rowH);
+
+      for (const [name, layer] of Object.entries(brandLayers)) {
+        const bctx = layer.getContext("2d");
+        bctx.clearRect(0, 0, w, h);
+        drawBrandDotMark(bctx, w, h, hudGrayColors[name], dot.visible, dot.scale, box);
+      }
+    }
+
+    function muteFrame() {
+      paintMuteLayers();
+      renderGlitch(muteCtx, muteLayers, muteCanvas.width, muteCanvas.height, screenGlitchSoft());
+      requestAnimationFrame(muteFrame);
+    }
+
+    function datetimeFrame() {
+      syncDatetimeClock();
+      paintTimeLayers();
+      paintDateLayers();
+      renderGlitch(timeCtx, timeLayers, timeCanvas.width, timeCanvas.height, screenGlitchSoft());
+      renderGlitch(dateCtx, dateLayers, dateCanvas.width, dateCanvas.height, screenGlitchSoft());
+      requestAnimationFrame(datetimeFrame);
+    }
+
+    function paintSludgeLayers() {
+      const w = sludgeCanvas.width;
+      const h = sludgeCanvas.height;
+      const rowH = dockRowCanvasHeight(muteLabelText, audioMuted);
+      const box = sludgeBoxMetrics(rowH);
+      const textX = box.margin + box.inset.x;
+      const rowY = h / 2;
+
+      for (const [name, layer] of Object.entries(sludgeLayers)) {
+        const bctx = layer.getContext("2d");
+        bctx.clearRect(0, 0, w, h);
+        bctx.letterSpacing = HUD_LETTER_SPACING;
+        bctx.font = fontOf(hudFontSize);
+        bctx.textAlign = "left";
+        bctx.textBaseline = "alphabetic";
+        drawLabeledLine(
+          bctx,
+          SLUDGE_LABEL,
+          textX,
+          box.metrics.baselineForMid(rowY),
+          box.metrics,
+          hudFontSize,
+          hudGrayColors[name],
+          hudPanel,
+          false
+        );
+      }
+    }
+
+    function brandFrame() {
+      paintBrandLayers();
+      renderGlitch(brandCtx, brandLayers, brandCanvas.width, brandCanvas.height, screenGlitchSoft());
+      requestAnimationFrame(brandFrame);
+    }
+
+    function sludgeFrame() {
+      paintSludgeLayers();
+      renderGlitch(sludgeCtx, sludgeLayers, sludgeCanvas.width, sludgeCanvas.height, screenGlitchSoft());
+      requestAnimationFrame(sludgeFrame);
+    }
+
+    const muteButton = document.getElementById("mute");
+    const muteLabel = document.getElementById("mute-label");
+    const bgm = document.getElementById("bgm");
+
+    function syncMuteUi() {
+      muteLabelText = audioMuted ? "Unmute" : "Mute";
+      muteLabel.textContent = muteLabelText;
+      muteButton.setAttribute("aria-pressed", String(!audioMuted));
+      muteButton.setAttribute("aria-label", audioMuted ? "Unmute audio" : "Mute audio");
+      bgm.muted = audioMuted;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      resizeMuteCanvas(dpr);
+      resizeTimeCanvas(dpr);
+      resizeDateCanvas(dpr);
+      resizeBrandCanvas(dpr);
+      resizeSludgeCanvas(dpr);
+      resizeDockBarCanvas(dpr);
+      if (dockLayoutFrozen) {
+        layoutDockSlots(true);
+      }
+    }
+
+    muteButton.addEventListener("click", () => {
+      audioMuted = !audioMuted;
+      syncMuteUi();
+    });
+
+    syncMuteUi();
+    beginSlideShow();
+
+    window.addEventListener("resize", () => {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      resizeDockBarCanvas(dpr);
+      syncTitleVerticalPosition();
+    });
+
+    async function startTitle() {
+      await document.fonts.load(`400 40px ${titleFont}`);
+      await document.fonts.ready;
+      datetimeTimeText = vcrTimeLabel();
+      datetimeDateText = vcrDateLabel();
+      const now = new Date();
+      datetimeLastTick = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+      resize();
+      requestAnimationFrame(screenGlitchLoop);
+      requestAnimationFrame(frame);
+      requestAnimationFrame(dockBarFrame);
+      requestAnimationFrame(muteFrame);
+      requestAnimationFrame(datetimeFrame);
+      requestAnimationFrame(brandFrame);
+      requestAnimationFrame(sludgeFrame);
+    }
+
+    startTitle();
+  </script>
+</body>
+</html>
