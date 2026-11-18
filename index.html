@@ -245,8 +245,9 @@
       <div class="vcr-sludge" aria-hidden="true">
         <canvas id="sludge-tv"></canvas>
       </div>
-      <div class="vcr-brand">
-        <canvas id="brand-tv" aria-hidden="true"></canvas>
+      <div class="vcr-brand" aria-hidden="true">
+        <!-- <canvas id="brand-tv" aria-hidden="true"></canvas> -->
+        <canvas id="scanner-tv"></canvas>
       </div>
     </div>
   </nav>
@@ -1250,6 +1251,7 @@
       const active = activeAudioEl();
       try {
         await active.play();
+        await resumeRadioAudioContext();
         syncNowPlayingFromAudio();
       } catch {
         return false;
@@ -1263,14 +1265,272 @@
     }
 
     function onAudioPlaybackSignal() {
+      if (radioAnalyser && radioStreamTaps.length === 0) {
+        attachRadioAnalyserTaps();
+      }
       syncNowPlayingFromAudio();
     }
 
     let radioAudioInited = false;
 
+    let radioStreamTaps = [];
+
+    function detachRadioAnalyserTaps() {
+      for (const node of radioStreamTaps) {
+        try {
+          node.disconnect();
+        } catch {
+          /* ignore */
+        }
+      }
+      radioStreamTaps = [];
+    }
+
+    function attachRadioAnalyserTaps() {
+      if (!radioAnalyser || !radioAudioCtx) return;
+      detachRadioAnalyserTaps();
+      for (const el of [bgmA, bgmB]) {
+        if (typeof el.captureStream !== "function") continue;
+        let stream;
+        try {
+          stream = el.captureStream();
+        } catch {
+          continue;
+        }
+        const src = radioAudioCtx.createMediaStreamSource(stream);
+        src.connect(radioAnalyser);
+        radioStreamTaps.push(src);
+      }
+    }
+
+    function initRadioAudioAnalyser() {
+      if (radioAnalyser) return;
+      try {
+        radioAudioCtx = new AudioContext();
+        radioAnalyser = radioAudioCtx.createAnalyser();
+        radioAnalyser.fftSize = 256;
+        radioAnalyser.smoothingTimeConstant = 0.55;
+        radioAnalyser.minDecibels = -88;
+        radioAnalyser.maxDecibels = -18;
+        attachRadioAnalyserTaps();
+      } catch {
+        detachRadioAnalyserTaps();
+        radioAnalyser = null;
+        radioAudioCtx = null;
+      }
+    }
+
+    async function resumeRadioAudioContext() {
+      if (radioAudioCtx && radioAudioCtx.state === "suspended") {
+        try {
+          await radioAudioCtx.resume();
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+
+    function pushScannerColumn() {
+      let sample = 0.07 + Math.random() * 0.05;
+      const active = activeAudioEl();
+      const playing = active && !active.paused;
+
+      let peakNorm = 0;
+      if (radioAnalyser && playing) {
+        const bins = new Uint8Array(radioAnalyser.frequencyBinCount);
+        radioAnalyser.getByteFrequencyData(bins);
+        let sum = 0;
+        let peak = 0;
+        const i0 = 1;
+        const i1 = Math.min(bins.length - 1, 48);
+        for (let i = i0; i <= i1; i++) {
+          sum += bins[i];
+          peak = Math.max(peak, bins[i]);
+        }
+        const avg = sum / (i1 - i0 + 1) / 255;
+        peakNorm = peak / 255;
+        sample = avg * 0.55 + peakNorm * 0.75;
+        if (audioMuted) {
+          sample = sample * 0.42 + 0.06;
+        } else {
+          sample = Math.min(1, sample * 1.2 + 0.1);
+        }
+      } else if (playing && audioMuted) {
+        sample = 0.12 + Math.random() * 0.08;
+      } else if (Math.random() < 0.035) {
+        sample = 0.14 + Math.random() * 0.22;
+      }
+
+      scannerCols.copyWithin(0, 1);
+      scannerWidths.copyWithin(0, 1);
+
+      const hotSignal = sample > 0.32 || peakNorm > 0.42;
+      const tierRoll = Math.random();
+      let widthMix;
+
+      if (tierRoll < 0.34) {
+        widthMix = 0.07 + Math.random() * 0.22;
+      } else if (tierRoll < 0.58) {
+        widthMix = 0.38 + Math.random() * 0.36;
+      } else {
+        widthMix = 0.9 + Math.random() * 0.62;
+        sample = Math.max(sample, 0.22 + Math.random() * 0.35);
+      }
+
+      if (!audioMuted && playing) {
+        if (hotSignal && Math.random() < 0.42) {
+          widthMix = Math.max(widthMix, 0.95 + Math.random() * 0.58);
+          sample = Math.max(sample, 0.35 + peakNorm * 0.45);
+        } else if (Math.random() < 0.22) {
+          widthMix = Math.max(widthMix, 0.82 + Math.random() * 0.48);
+        }
+      } else if (Math.random() < 0.14) {
+        widthMix = Math.max(widthMix, 0.78 + Math.random() * 0.45);
+        sample = Math.max(sample, 0.18 + Math.random() * 0.2);
+      }
+
+      if (Math.random() < 0.24) {
+        widthMix = 1.08 + Math.random() * 0.58;
+        sample = Math.max(sample, 0.34 + Math.random() * 0.42);
+      }
+
+      scannerCols[SCANNER_COLS - 1] = Math.min(1, Math.max(0, sample));
+      scannerWidths[SCANNER_COLS - 1] = Math.min(1.7, Math.max(0.07, widthMix));
+    }
+
+    function scannerContentBox(w, h) {
+      const inset = hudPanelInsets(hudFontSize);
+      const margin = 1;
+      const x = margin + inset.x;
+      const y = margin + inset.y;
+      return {
+        margin,
+        inset,
+        x,
+        y,
+        width: Math.max(8, w - 2 * (margin + inset.x)),
+        height: Math.max(8, h - 2 * (margin + inset.y))
+      };
+    }
+
+    const scannerPhosphorRgb = [132, 255, 178];
+
+    function scannerPhosphorRgba(a, channelAlpha = 1) {
+      const [r, g, b] = scannerPhosphorRgb;
+      return `rgba(${r}, ${g}, ${b}, ${a * channelAlpha})`;
+    }
+
+    function paintScannerSignal(bctx, plot, channelAlpha = 1) {
+      bctx.save();
+      bctx.imageSmoothingEnabled = false;
+      bctx.beginPath();
+      bctx.rect(plot.x, plot.y, plot.width, plot.height);
+      bctx.clip();
+
+      const step = Math.max(2, Math.round(plot.width / 22));
+      bctx.strokeStyle = `rgba(0, 95, 48, ${0.22 * channelAlpha})`;
+      bctx.lineWidth = 1;
+      for (let x = plot.x; x < plot.x + plot.width; x += step) {
+        bctx.beginPath();
+        bctx.moveTo(x + 0.5, plot.y);
+        bctx.lineTo(x + 0.5, plot.y + plot.height);
+        bctx.stroke();
+      }
+      for (let y = plot.y; y < plot.y + plot.height; y += step) {
+        bctx.beginPath();
+        bctx.moveTo(plot.x, y + 0.5);
+        bctx.lineTo(plot.x + plot.width, y + 0.5);
+        bctx.stroke();
+      }
+
+      const plotTop = plot.y;
+      const plotBottom = plot.y + plot.height;
+      const plotH = plot.height;
+      const colW = plot.width / SCANNER_COLS;
+
+      for (let i = 0; i < SCANNER_COLS; i++) {
+        const v = scannerCols[i];
+        if (v < 0.03) continue;
+
+        const x = plot.x + (i + 0.5) * colW;
+        const widthT = scannerWidths[i] || 0.5;
+        const thin = widthT < 0.32;
+        const lw = Math.max(0.75, colW * (0.16 + widthT * 0.95));
+        const glowW = lw * (thin ? 1.15 : 1.55);
+        const coreBoost = thin ? 0.85 : 1;
+
+        bctx.fillStyle = `rgba(45, 255, 125, ${(0.03 + v * 0.2) * (0.7 + widthT * 0.55) * channelAlpha})`;
+        bctx.fillRect(x - glowW / 2, plotTop, glowW, plotH);
+
+        const core = bctx.createLinearGradient(0, plotTop, 0, plotBottom);
+        const edgeA = (0.08 + v * 0.22) * coreBoost;
+        const midA = (0.22 + v * 0.62) * (0.85 + widthT * 0.35);
+        core.addColorStop(0, scannerPhosphorRgba(edgeA, channelAlpha));
+        core.addColorStop(0.35, scannerPhosphorRgba(midA, channelAlpha));
+        core.addColorStop(0.65, scannerPhosphorRgba(midA * 0.95, channelAlpha));
+        core.addColorStop(1, scannerPhosphorRgba(edgeA, channelAlpha));
+        bctx.strokeStyle = core;
+        bctx.lineWidth = lw;
+        bctx.beginPath();
+        bctx.moveTo(x, plotTop);
+        bctx.lineTo(x, plotBottom);
+        bctx.stroke();
+
+        if (v > 0.28 && widthT > 0.4) {
+          bctx.strokeStyle = scannerPhosphorRgba(0.12 + (v - 0.28) * (0.55 + widthT * 0.45), channelAlpha);
+          bctx.lineWidth = Math.max(0.75, lw * (thin ? 0.55 : 0.38));
+          bctx.beginPath();
+          bctx.moveTo(x, plotTop);
+          bctx.lineTo(x, plotBottom);
+          bctx.stroke();
+        }
+
+        if (!thin && v > 0.42 && widthT > 0.75) {
+          bctx.strokeStyle = scannerPhosphorRgba(0.08 + (v - 0.42) * 0.35, channelAlpha);
+          bctx.lineWidth = Math.max(1, lw * 0.22);
+          bctx.beginPath();
+          bctx.moveTo(x, plotTop);
+          bctx.lineTo(x, plotBottom);
+          bctx.stroke();
+        }
+      }
+
+      const sweepX = plot.x + plot.width - 1;
+      bctx.strokeStyle = `rgba(150, 255, 190, ${0.5 * channelAlpha})`;
+      bctx.lineWidth = 1;
+      bctx.beginPath();
+      bctx.moveTo(sweepX, plotTop);
+      bctx.lineTo(sweepX, plotBottom);
+      bctx.stroke();
+
+      bctx.restore();
+    }
+
+    function paintScannerLayers() {
+      const w = scannerCanvas.width;
+      const h = scannerCanvas.height;
+      const plot = scannerContentBox(w, h);
+
+      for (const [name, layer] of Object.entries(scannerLayers)) {
+        const bctx = layer.getContext("2d");
+        bctx.clearRect(0, 0, w, h);
+        drawHudHighlight(bctx, 0, 0, w, h, hudPanel);
+        const alpha = name === "white" ? 1 : name === "red" ? 0.82 : 0.88;
+        paintScannerSignal(bctx, plot, alpha);
+      }
+    }
+
+    function scannerFrame() {
+      pushScannerColumn();
+      paintScannerLayers();
+      renderGlitch(scannerCtx, scannerLayers, scannerCanvas.width, scannerCanvas.height, screenGlitchSoft());
+      requestAnimationFrame(scannerFrame);
+    }
+
     function initRadioAudio() {
       if (radioAudioInited) return;
       radioAudioInited = true;
+      initRadioAudioAnalyser();
 
       wireAudioSlot(0);
       wireAudioSlot(1);
@@ -1335,6 +1595,12 @@
       cyan: "rgba(168, 178, 186, 0.09)"
     };
 
+    const scannerGlitchColors = {
+      white: "rgba(132, 255, 178, 0.94)",
+      red: "rgba(92, 228, 138, 0.12)",
+      cyan: "rgba(108, 255, 196, 0.1)"
+    };
+
     const hudPanel = {
       fill: "rgba(18, 20, 24, 0.97)",
       border: "rgba(38, 40, 46, 0.72)"
@@ -1389,9 +1655,12 @@
     const dockBarCanvas = document.getElementById("dock-bar-tv");
     const dockBarCtx = dockBarCanvas.getContext("2d");
     const dockBarLayers = makeLayerSet();
-    const brandCanvas = document.getElementById("brand-tv");
-    const brandCtx = brandCanvas.getContext("2d");
-    const brandLayers = makeLayerSet();
+    // const brandCanvas = document.getElementById("brand-tv");
+    // const brandCtx = brandCanvas.getContext("2d");
+    // const brandLayers = makeLayerSet();
+    const scannerCanvas = document.getElementById("scanner-tv");
+    const scannerCtx = scannerCanvas.getContext("2d");
+    const scannerLayers = makeLayerSetFrom(scannerGlitchColors);
     const sludgeCanvas = document.getElementById("sludge-tv");
     const sludgeCtx = sludgeCanvas.getContext("2d");
     const sludgeLayers = makeLayerSet();
@@ -1410,6 +1679,12 @@
     let dockLayoutFrozen = false;
     let frozenDockInnerWidth = 0;
     let frozenSlotLeft = { time: 0, date: 0, mute: 0, sludge: 0, brand: 0 };
+    const SCANNER_CSS_W = 104;
+    const SCANNER_COLS = 42;
+    const scannerCols = new Float32Array(SCANNER_COLS);
+    const scannerWidths = new Float32Array(SCANNER_COLS);
+    let radioAudioCtx = null;
+    let radioAnalyser = null;
     let frozenMuteBar = { left: 0, width: 0 };
 
     function fontOf(size) {
@@ -1660,18 +1935,32 @@
       }
     }
 
-    function resizeBrandCanvas(dpr) {
+    function resizeScannerCanvas(dpr) {
       const rowH = dockRowCanvasHeight(muteLabelText, audioMuted);
-      const { w, h } = brandDotBoxMetrics(rowH);
-      brandCanvas.width = Math.ceil(w);
-      brandCanvas.height = Math.ceil(h);
-      brandCanvas.style.width = `${w / dpr}px`;
-      brandCanvas.style.height = `${h / dpr}px`;
-      for (const layer of Object.values(brandLayers)) {
-        layer.width = brandCanvas.width;
-        layer.height = brandCanvas.height;
+      const w = Math.ceil(SCANNER_CSS_W * dpr);
+      const h = Math.ceil(rowH);
+      scannerCanvas.width = w;
+      scannerCanvas.height = h;
+      scannerCanvas.style.width = `${SCANNER_CSS_W}px`;
+      scannerCanvas.style.height = `${rowH / dpr}px`;
+      for (const layer of Object.values(scannerLayers)) {
+        layer.width = w;
+        layer.height = h;
       }
     }
+
+    // function resizeBrandCanvas(dpr) {
+    //   const rowH = dockRowCanvasHeight(muteLabelText, audioMuted);
+    //   const { w, h } = brandDotBoxMetrics(rowH);
+    //   brandCanvas.width = Math.ceil(w);
+    //   brandCanvas.height = Math.ceil(h);
+    //   brandCanvas.style.width = `${w / dpr}px`;
+    //   brandCanvas.style.height = `${h / dpr}px`;
+    //   for (const layer of Object.values(brandLayers)) {
+    //     layer.width = brandCanvas.width;
+    //     layer.height = brandCanvas.height;
+    //   }
+    // }
 
     function sludgeBoxMetrics(rowH) {
       const probe = sludgeLayers.white.getContext("2d");
@@ -2120,8 +2409,8 @@
       resizeMuteCanvas(dpr);
       resizeTimeCanvas(dpr);
       resizeDateCanvas(dpr);
-      resizeBrandCanvas(dpr);
       resizeSludgeCanvas(dpr);
+      resizeScannerCanvas(dpr);
       resizeDockBarCanvas(dpr);
       layoutDockSlots();
       syncTitleVerticalPosition();
@@ -2237,19 +2526,19 @@
       }
     }
 
-    function paintBrandLayers() {
-      const w = brandCanvas.width;
-      const h = brandCanvas.height;
-      const dot = brandDotState(performance.now());
-      const rowH = dockRowCanvasHeight(muteLabelText, audioMuted);
-      const box = brandDotBoxMetrics(rowH);
-
-      for (const [name, layer] of Object.entries(brandLayers)) {
-        const bctx = layer.getContext("2d");
-        bctx.clearRect(0, 0, w, h);
-        drawBrandDotMark(bctx, w, h, hudGrayColors[name], dot.visible, dot.scale, box);
-      }
-    }
+    // function paintBrandLayers() {
+    //   const w = brandCanvas.width;
+    //   const h = brandCanvas.height;
+    //   const dot = brandDotState(performance.now());
+    //   const rowH = dockRowCanvasHeight(muteLabelText, audioMuted);
+    //   const box = brandDotBoxMetrics(rowH);
+    //
+    //   for (const [name, layer] of Object.entries(brandLayers)) {
+    //     const bctx = layer.getContext("2d");
+    //     bctx.clearRect(0, 0, w, h);
+    //     drawBrandDotMark(bctx, w, h, hudGrayColors[name], dot.visible, dot.scale, box);
+    //   }
+    // }
 
     function muteFrame() {
       paintMuteLayers();
@@ -2295,11 +2584,11 @@
       }
     }
 
-    function brandFrame() {
-      paintBrandLayers();
-      renderGlitch(brandCtx, brandLayers, brandCanvas.width, brandCanvas.height, screenGlitchSoft());
-      requestAnimationFrame(brandFrame);
-    }
+    // function brandFrame() {
+    //   paintBrandLayers();
+    //   renderGlitch(brandCtx, brandLayers, brandCanvas.width, brandCanvas.height, screenGlitchSoft());
+    //   requestAnimationFrame(brandFrame);
+    // }
 
     function sludgeFrame() {
       paintSludgeLayers();
@@ -2320,8 +2609,8 @@
       resizeMuteCanvas(dpr);
       resizeTimeCanvas(dpr);
       resizeDateCanvas(dpr);
-      resizeBrandCanvas(dpr);
       resizeSludgeCanvas(dpr);
+      resizeScannerCanvas(dpr);
       resizeDockBarCanvas(dpr);
       if (dockLayoutFrozen) {
         layoutDockSlots(true);
@@ -2330,8 +2619,12 @@
 
     muteButton.addEventListener("click", async () => {
       audioMuted = !audioMuted;
+      initRadioAudioAnalyser();
       syncMuteUi();
       playbackUnlocked = true;
+      syncBroadcastMuteState();
+      await resumeRadioAudioContext();
+      attachRadioAnalyserTaps();
       syncAudioToBroadcast(true);
       if (activeAudioEl().paused) {
         await tryStartMutedPlayback();
@@ -2343,6 +2636,7 @@
     window.addEventListener("resize", () => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       resizeBgCanvas();
+      resizeScannerCanvas(dpr);
       resizeDockBarCanvas(dpr);
       syncTitleVerticalPosition();
       if (nowPlayingTrackIndex >= 0 && nowPlayingMixIndex >= 0) {
@@ -2366,8 +2660,8 @@
       requestAnimationFrame(dockBarFrame);
       requestAnimationFrame(muteFrame);
       requestAnimationFrame(datetimeFrame);
-      requestAnimationFrame(brandFrame);
       requestAnimationFrame(sludgeFrame);
+      requestAnimationFrame(scannerFrame);
     }
 
     startTitle();
