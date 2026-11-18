@@ -1084,6 +1084,48 @@
       return titlePrefixWidth(bctx, fullLine, endIndex) - titlePrefixWidth(bctx, fullLine, startIndex);
     }
 
+    function measureTitleInkSegments(bctx, track, songUpper, startXDev) {
+      let x = startXDev;
+      const artists = [];
+      track.artists.forEach((artist, index) => {
+        if (index > 0) x += titleSegmentWidth(bctx, ", ");
+        const label = artist.name.toUpperCase();
+        const w = titleSegmentWidth(bctx, label);
+        artists.push({ href: artist.href, name: artist.name, x: x, w: w });
+        x += w;
+      });
+      const gapW = titleSegmentWidth(bctx, "   ");
+      const gap = { x: x, w: gapW };
+      x += gapW;
+      const songW = titleSegmentWidth(bctx, songUpper);
+      const song = { x: x, w: songW };
+      return { artists, gap, song };
+    }
+
+    function drawTitleInkSegments(bctx, track, songUpper, textXDev, textY, fillStyle) {
+      bctx.letterSpacing = TITLE_LETTER_SPACING;
+      bctx.font = fontOf(fontSize);
+      bctx.fillStyle = fillStyle;
+      bctx.textAlign = "left";
+      bctx.textBaseline = "alphabetic";
+
+      let x = textXDev;
+      track.artists.forEach((artist, index) => {
+        if (index > 0) {
+          const sep = ", ";
+          bctx.fillText(sep, x, textY);
+          x += titleSegmentWidth(bctx, sep);
+        }
+        const label = artist.name.toUpperCase();
+        bctx.fillText(label, x, textY);
+        x += titleSegmentWidth(bctx, label);
+      });
+      const gap = "   ";
+      bctx.fillText(gap, x, textY);
+      x += titleSegmentWidth(bctx, gap);
+      bctx.fillText(songUpper, x, textY);
+    }
+
     function titleLinkLayout(line) {
       const probe = layers.white.getContext("2d");
       const block = titleLineMetrics(probe, line);
@@ -1110,54 +1152,48 @@
       if (!titleLinksHost || !canvas) return;
       titleLinksHost.innerHTML = "";
 
-      const artistLine = artistLineUpper(track);
       const song = track.song.toUpperCase();
+      const artistLine = artistLineUpper(track);
       const fullLine = titleLineText(artistLine, song);
       const layout = titleLinkLayout(fullLine);
       if (!layout) return;
 
       const { textX, bandTop, bandH, probe } = layout;
-      const songGap = "   ";
-      const artistRegionEndX = textX + titlePrefixWidth(probe, artistLine, artistLine.length);
-      const gapWidth = titleSegmentWidth(probe, songGap);
-      const songStartX = artistRegionEndX + gapWidth;
-      const songWidth = titleSegmentWidth(probe, song);
+      const wCss = canvas.clientWidth || LAYOUT_CSS_W;
+      const xScale = wCss / canvas.width;
+      const textXDev = textX / xScale;
+      const segs = measureTitleInkSegments(probe, track, song, textXDev);
 
-      const addShield = (className, left, width) => {
-        if (width <= 0) return;
+      const toCss = (xDev, wDev) => ({
+        left: xDev * xScale,
+        width: Math.max(0, wDev * xScale)
+      });
+
+      const addShield = (className, box) => {
+        if (box.width <= 0) return;
         const shield = document.createElement("span");
         shield.className = className;
         shield.setAttribute("aria-hidden", "true");
-        shield.style.left = `${left}px`;
+        shield.style.left = `${box.left}px`;
         shield.style.top = `${bandTop}px`;
-        shield.style.width = `${width}px`;
+        shield.style.width = `${box.width}px`;
         shield.style.height = `${bandH}px`;
         titleLinksHost.appendChild(shield);
       };
 
-      addShield("title-gap-shield", artistRegionEndX, gapWidth);
-      addShield("title-song-shield", songStartX, songWidth);
+      addShield("title-gap-shield", toCss(segs.gap.x, segs.gap.w));
+      addShield("title-song-shield", toCss(segs.song.x, segs.song.w));
 
-      let charIndex = 0;
-      track.artists.forEach((artist, index) => {
-        if (index > 0) charIndex += 2;
-        const label = artist.name.toUpperCase();
-        const start = charIndex;
-        const end = start + label.length;
-        charIndex = end;
-
-        const nameWidth = titleSliceWidth(probe, artistLine, start, end);
-        const startX = textX + titlePrefixWidth(probe, artistLine, start);
-
+      segs.artists.forEach((seg) => {
+        const box = toCss(seg.x, seg.w);
         const a = document.createElement("a");
-        a.href = artist.href;
+        a.href = seg.href;
         a.target = "_blank";
         a.rel = "noopener noreferrer";
-        a.setAttribute("aria-label", `${artist.name} on Instagram`);
-        a.title = artist.name;
-        a.style.left = `${startX}px`;
+        a.setAttribute("aria-label", `${seg.name} on Instagram`);
+        a.style.left = `${box.left}px`;
         a.style.top = `${bandTop}px`;
-        a.style.width = `${Math.max(1, nameWidth)}px`;
+        a.style.width = `${Math.max(1, box.width)}px`;
         a.style.height = `${bandH}px`;
         titleLinksHost.appendChild(a);
       });
@@ -1991,12 +2027,28 @@
       const blockTop = midY - block.blockH / 2;
       const textY = blockTop + block.inset.y + block.metrics.ascent;
 
-      bctx.letterSpacing = TITLE_LETTER_SPACING;
-      bctx.font = fontOf(fontSize);
-      bctx.textAlign = "left";
-      bctx.textBaseline = "alphabetic";
+      const track =
+        nowPlayingMixIndex >= 0 && nowPlayingTrackIndex >= 0
+          ? broadcastMixes[nowPlayingMixIndex].tracks[nowPlayingTrackIndex]
+          : null;
 
-      drawLabeledLine(bctx, block.line, textX, textY, block.metrics, fontSize, fillStyle, titlePanel);
+      if (track) {
+        drawHudHighlight(
+          bctx,
+          textX - block.inset.x,
+          blockTop,
+          block.blockW,
+          block.blockH,
+          titlePanel
+        );
+        drawTitleInkSegments(bctx, track, songText, textX, textY, fillStyle);
+      } else {
+        bctx.letterSpacing = TITLE_LETTER_SPACING;
+        bctx.font = fontOf(fontSize);
+        bctx.textAlign = "left";
+        bctx.textBaseline = "alphabetic";
+        drawLabeledLine(bctx, block.line, textX, textY, block.metrics, fontSize, fillStyle, titlePanel);
+      }
     }
 
     function paintLayers(phase = "normal") {
