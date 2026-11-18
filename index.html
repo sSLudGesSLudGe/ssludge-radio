@@ -88,7 +88,7 @@
       border: 0;
     }
 
-    a.title {
+    .title-wrap {
       display: block;
       position: fixed;
       z-index: 2;
@@ -96,14 +96,27 @@
       width: 1100px;
       margin: 0;
       transform: translateX(-50%);
-      cursor: pointer;
-      text-decoration: none;
     }
 
-    a.title canvas {
+    .title-wrap canvas {
       display: block;
       width: 1100px;
       height: 260px;
+    }
+
+    .title-links {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    .title-links a {
+      position: absolute;
+      pointer-events: auto;
+      opacity: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-indent: -9999px;
     }
 
     .vcr-dock {
@@ -213,32 +226,102 @@
       </div>
     </div>
   </nav>
-  <audio id="bgm" preload="none" hidden></audio>
-  <a class="title" href="https://www.instagram.com/vsebee/" target="_blank" rel="noopener noreferrer">
-    <h1>Xopowo Бесконечность8</h1>
+  <audio id="bgm" hidden playsinline></audio>
+  <div class="title-wrap" id="title-wrap">
+    <h1 id="title-heading">Madd Rod, Altered View Dead Man Walking</h1>
     <canvas id="tv" width="1100" height="260" aria-hidden="true"></canvas>
-  </a>
+    <div class="title-links" id="title-links"></div>
+  </div>
   <script>
-    const slides = [
-      { artist: "Xopowo", song: "Бесконечность8", href: "#" },
-      { artist: "Madd Rod, Altered View", song: "Dead Man Walking", href: "#" },
-      { artist: "Phase Fatale", song: "Velvet Imprints", href: "#" },
-      { artist: "Die Sexual", song: "Darkest Hour", href: "#" },
-      { artist: "Teatre", song: "Surrender", href: "#" },
-      { artist: "Panther Modern", song: "Tasting Static", href: "#" },
-      { artist: "Potochkine", song: "Endorphines", href: "#" },
-      { artist: "SARIN, Scarlit Port", song: "PIROOZI", href: "#" },
-      { artist: "Years Of Denial", song: "AI Lover", href: "#" },
-      { artist: "Primary", song: "Scanner", href: "#" },
-      { artist: "Koloah", song: "Graduate", href: "#" },
-      { artist: "Special Interest, Boy Harsher", song: "Street Pulse Beat (Boy Harsher Remix)", href: "#" },
-      { artist: "Human Performance Lab", song: "Achievement", href: "#" }
+    const RADIO_MP3 =
+      "https://pub-2e7d1f1d1dd143109a88140a32dca5bf.r2.dev/1%20sSLudGe%20-%20Making%20film%20MP3.mp3";
+    const MIX_DURATION_SEC = 53 * 60 + 38;
+
+    const mixTracks = [
+      {
+        endSec: 332,
+        artists: [
+          { name: "Madd Rod", href: "https://www.instagram.com/madd_rod/?hl=en" },
+          { name: "Altered View", href: "https://www.instagram.com/altered_view_music/" }
+        ],
+        song: "Dead Man Walking"
+      },
+      {
+        endSec: 460,
+        artists: [{ name: "Xopowo", href: "https://www.instagram.com/ixopowo/?hl=en" }],
+        song: "Бесконечность8"
+      },
+      {
+        endSec: 720,
+        artists: [{ name: "Phase Fatale", href: "https://www.instagram.com/phasefatale/?hl=en" }],
+        song: "Velvet Imprints"
+      },
+      {
+        endSec: 924,
+        artists: [{ name: "Die Sexual", href: "https://www.instagram.com/diesexualofficial/" }],
+        song: "Darkest Hour"
+      },
+      {
+        endSec: 1242,
+        artists: [{ name: "Theatre", href: "https://www.instagram.com/teatre__/" }],
+        song: "Surrender"
+      },
+      {
+        endSec: 1420,
+        artists: [{ name: "Panther Modern", href: "https://www.instagram.com/panthermodern__/?hl=en" }],
+        song: "Tasting Static"
+      },
+      {
+        endSec: 1622,
+        artists: [{ name: "Potochkine", href: "https://www.instagram.com/potochkine" }],
+        song: "Endorphines"
+      },
+      {
+        endSec: 1825,
+        artists: [
+          { name: "SARIN", href: "https://www.instagram.com/sarinvx/" },
+          { name: "Scarlit Port", href: "https://www.instagram.com/harrrp_" }
+        ],
+        song: "PIROOZI"
+      },
+      {
+        endSec: 2232,
+        artists: [{ name: "Years Of Denial", href: "https://www.instagram.com/yearsofdenial/" }],
+        song: "AI Lover"
+      },
+      {
+        endSec: 2494,
+        artists: [{ name: "Primary", href: "https://www.instagram.com/primaryberlin/" }],
+        song: "Scanner"
+      },
+      {
+        endSec: 2730,
+        artists: [{ name: "Koloah", href: "https://www.instagram.com/koloah" }],
+        song: "Graduate"
+      },
+      {
+        endSec: 3029,
+        artists: [
+          { name: "Special Interest", href: "https://www.instagram.com/specialinterest.no/" },
+          { name: "Boy Harsher", href: "https://www.instagram.com/boyharsher/" }
+        ],
+        song: "Street Pulse Beat - Boy Harsher Remix"
+      },
+      {
+        endSec: MIX_DURATION_SEC,
+        artists: [{ name: "Human Performance Lab", href: "https://www.instagram.com/humanperformancelabmusic" }],
+        song: "Achievement"
+      }
     ];
-    const link = document.querySelector("a.title");
-    const heading = document.querySelector("h1");
-    let slideIndex = 0;
-    let artistText = slides[0].artist.toUpperCase();
-    let songText = slides[0].song.toUpperCase();
+
+    let nowPlayingIndex = -1;
+    let playbackUnlocked = false;
+
+    const titleWrap = document.getElementById("title-wrap");
+    const titleLinksHost = document.getElementById("title-links");
+    const heading = document.getElementById("title-heading");
+    let artistText = "";
+    let songText = "";
     let titleDisplayText = "";
 
     const SLIDE_HOLD_MS = 8000;
@@ -376,40 +459,120 @@
       return "recover";
     }
 
-    function clearSlideText() {
-      clearSlideCycleTimer();
-      artistText = "";
-      songText = "";
-      titleDisplayText = "";
-      heading.textContent = "";
+    function trackIndexAt(seconds) {
+      for (let i = 0; i < mixTracks.length; i++) {
+        if (seconds < mixTracks[i].endSec) return i;
+      }
+      return mixTracks.length - 1;
     }
 
-    function showSlide(index) {
-      slideIndex = index;
-      const slide = slides[slideIndex];
-      artistText = slide.artist.toUpperCase();
-      songText = slide.song.toUpperCase();
-      link.href = slide.href;
+    function mixPositionSeconds() {
+      if (!Number.isFinite(bgm.duration) || bgm.duration <= 0) {
+        return bgm.currentTime;
+      }
+      const span = Math.min(bgm.duration, MIX_DURATION_SEC);
+      return bgm.currentTime % span;
     }
 
-    function presentSlide() {
-      clearSlideCycleTimer();
-      const fullLine = titleLineText(artistText, songText);
-      titleDisplayText = fullLine;
-      heading.textContent = fullLine;
-
-      slideCycleTimer = setTimeout(() => {
-        clearSlideText();
-        slideCycleTimer = setTimeout(() => {
-          showSlide((slideIndex + 1) % slides.length);
-          presentSlide();
-        }, slideBlankGapMs());
-      }, SLIDE_HOLD_MS);
+    function artistLineFor(track) {
+      return track.artists.map((a) => a.name).join(", ");
     }
 
-    function beginSlideShow() {
-      showSlide(0);
-      presentSlide();
+    function layoutTitleLinks(track) {
+      if (!titleLinksHost || !canvas) return;
+      titleLinksHost.innerHTML = "";
+      const probe = layers.white.getContext("2d");
+      const artistLine = artistLineFor(track).toUpperCase();
+      const song = track.song.toUpperCase();
+      const line = titleLineText(artistLine, song);
+      const block = titleLineMetrics(probe, line);
+      if (!block) return;
+
+      const canvasCssW = canvas.clientWidth || LAYOUT_CSS_W;
+      const canvasCssH = canvas.clientHeight || LAYOUT_TITLE_H;
+      let textX = (canvasCssW - block.blockW) / 2 + block.inset.x;
+      textX = Math.max(block.inset.x, Math.min(textX, canvasCssW - block.blockW - block.inset.x));
+      const midY = canvasCssH * 0.5;
+      const textY = midY - block.blockH / 2 + block.inset.y + block.metrics.ascent;
+      const bandTop = textY - block.metrics.ascent;
+      const bandH = block.metrics.height;
+
+      probe.letterSpacing = TITLE_LETTER_SPACING;
+      probe.font = fontOf(fontSize);
+      probe.textAlign = "left";
+      let x = textX;
+
+      track.artists.forEach((artist, index) => {
+        if (index > 0) {
+          const sep = ", ";
+          x += probe.measureText(sep).width;
+        }
+        const label = artist.name.toUpperCase();
+        const w = probe.measureText(label).width;
+        const a = document.createElement("a");
+        a.href = artist.href;
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        a.textContent = label;
+        a.setAttribute("aria-label", `${artist.name} on Instagram`);
+        a.style.left = `${x}px`;
+        a.style.top = `${bandTop}px`;
+        a.style.width = `${w}px`;
+        a.style.height = `${bandH}px`;
+        titleLinksHost.appendChild(a);
+        x += w;
+      });
+    }
+
+    function applyNowPlaying(track) {
+      const artistLine = artistLineFor(track);
+      artistText = artistLine.toUpperCase();
+      songText = track.song.toUpperCase();
+      titleDisplayText = titleLineText(artistText, songText);
+      heading.textContent = titleDisplayText;
+      layoutTitleLinks(track);
+    }
+
+    function syncNowPlayingFromAudio() {
+      if (bgm.paused && !playbackUnlocked) return;
+      const t = mixPositionSeconds();
+      const idx = trackIndexAt(t);
+      if (idx !== nowPlayingIndex) {
+        nowPlayingIndex = idx;
+        applyNowPlaying(mixTracks[idx]);
+      }
+    }
+
+    async function tryStartMutedPlayback() {
+      bgm.muted = audioMuted;
+      try {
+        await bgm.play();
+        syncNowPlayingFromAudio();
+      } catch {
+        return false;
+      }
+      return true;
+    }
+
+    let radioAudioInited = false;
+
+    function initRadioAudio() {
+      if (radioAudioInited) return;
+      radioAudioInited = true;
+      bgm.src = RADIO_MP3;
+      bgm.preload = "auto";
+      bgm.loop = true;
+      bgm.muted = audioMuted;
+
+      bgm.addEventListener("timeupdate", syncNowPlayingFromAudio);
+      bgm.addEventListener("play", syncNowPlayingFromAudio);
+      bgm.addEventListener("loadedmetadata", () => {
+        tryStartMutedPlayback();
+      });
+
+      applyNowPlaying(mixTracks[0]);
+      nowPlayingIndex = 0;
+      tryStartMutedPlayback();
       scheduleTitleGlitch();
       scheduleScreenGlitch();
     }
@@ -1047,8 +1210,9 @@
       probe.letterSpacing = TITLE_LETTER_SPACING;
       probe.font = fontOf(size);
       let tallest = 0;
-      for (const slide of slides) {
-        const { blockH } = titleTextMetrics(probe, slide.artist.toUpperCase(), slide.song.toUpperCase(), size);
+      for (const track of mixTracks) {
+        const line = titleLineText(artistLineFor(track).toUpperCase(), track.song.toUpperCase());
+        const { blockH } = titleLineMetrics(probe, line, size);
         tallest = Math.max(tallest, blockH);
       }
       return tallest;
@@ -1059,8 +1223,8 @@
       probe.font = fontOf(size);
       const inset = hudPanelInsets(size);
       let widest = 0;
-      for (const slide of slides) {
-        const line = titleLineText(slide.artist.toUpperCase(), slide.song.toUpperCase());
+      for (const track of mixTracks) {
+        const line = titleLineText(artistLineFor(track).toUpperCase(), track.song.toUpperCase());
         const metrics = muteTextMetrics(probe, line, size, TITLE_LETTER_SPACING);
         widest = Math.max(widest, inset.x * 2 + metrics.width);
       }
@@ -1079,7 +1243,7 @@
     }
 
     function syncTitleVerticalPosition() {
-      const titleEl = document.querySelector("a.title");
+      const titleEl = document.getElementById("title-wrap");
       const dockBar = document.getElementById("dock-bar-tv");
       if (!titleEl || !dockBar) return;
       const barTop = dockBar.getBoundingClientRect().top;
@@ -1109,6 +1273,9 @@
       resizeDockBarCanvas(dpr);
       layoutDockSlots();
       syncTitleVerticalPosition();
+      if (nowPlayingIndex >= 0) {
+        layoutTitleLinks(mixTracks[nowPlayingIndex]);
+      }
       syncHudSafeArea();
     }
 
@@ -1294,18 +1461,24 @@
       }
     }
 
-    muteButton.addEventListener("click", () => {
+    muteButton.addEventListener("click", async () => {
       audioMuted = !audioMuted;
       syncMuteUi();
+      playbackUnlocked = true;
+      if (bgm.paused) {
+        await tryStartMutedPlayback();
+      }
     });
 
     syncMuteUi();
-    beginSlideShow();
 
     window.addEventListener("resize", () => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       resizeDockBarCanvas(dpr);
       syncTitleVerticalPosition();
+      if (nowPlayingIndex >= 0) {
+        layoutTitleLinks(mixTracks[nowPlayingIndex]);
+      }
     });
 
     async function startTitle() {
@@ -1316,6 +1489,7 @@
       const now = new Date();
       datetimeLastTick = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
       resize();
+      initRadioAudio();
       requestAnimationFrame(screenGlitchLoop);
       requestAnimationFrame(frame);
       requestAnimationFrame(dockBarFrame);
