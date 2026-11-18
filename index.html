@@ -117,8 +117,16 @@
       pointer-events: auto;
       opacity: 0;
       overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      clip-path: inset(50%);
       white-space: nowrap;
-      text-indent: -9999px;
+    }
+
+    .title-links .title-song-shield {
+      position: absolute;
+      pointer-events: auto;
+      cursor: default;
+      background: transparent;
     }
 
     .vcr-dock {
@@ -1060,6 +1068,16 @@
       return muteTextMetrics(bctx, text, fontSize, TITLE_LETTER_SPACING).width;
     }
 
+    function titlePrefixWidth(bctx, fullLine, endIndex) {
+      if (endIndex <= 0) return 0;
+      return titleSegmentWidth(bctx, fullLine.slice(0, endIndex));
+    }
+
+    function titleSliceWidth(bctx, fullLine, startIndex, endIndex) {
+      if (endIndex <= startIndex) return 0;
+      return titlePrefixWidth(bctx, fullLine, endIndex) - titlePrefixWidth(bctx, fullLine, startIndex);
+    }
+
     function titleLinkLayout(line) {
       const probe = layers.white.getContext("2d");
       const block = titleLineMetrics(probe, line);
@@ -1093,31 +1111,49 @@
       if (!layout) return;
 
       const { textX, bandTop, bandH, probe } = layout;
-      const artistSep = ", ";
-      let cursorX = textX;
+      const songGap = "   ";
 
+      let scanAt = 0;
       track.artists.forEach((artist, index) => {
         if (index > 0) {
-          cursorX += titleSegmentWidth(probe, artistSep);
+          if (artistLine.startsWith(", ", scanAt)) scanAt += 2;
+          else if (artistLine[scanAt] === ",") scanAt += 1;
         }
 
         const label = artist.name.toUpperCase();
-        const nameWidth = titleSegmentWidth(probe, label);
+        const start = artistLine.indexOf(label, scanAt);
+        if (start < 0) return;
+        const end = start + label.length;
+        scanAt = end;
+
+        const nameWidth = titleSliceWidth(probe, fullLine, start, end);
+        const startX = textX + titlePrefixWidth(probe, fullLine, start);
 
         const a = document.createElement("a");
         a.href = artist.href;
         a.target = "_blank";
         a.rel = "noopener noreferrer";
-        a.textContent = label;
         a.setAttribute("aria-label", `${artist.name} on Instagram`);
-        a.style.left = `${cursorX}px`;
+        a.style.left = `${startX}px`;
         a.style.top = `${bandTop}px`;
-        a.style.width = `${nameWidth}px`;
+        a.style.width = `${Math.max(0, nameWidth)}px`;
         a.style.height = `${bandH}px`;
         titleLinksHost.appendChild(a);
-
-        cursorX += nameWidth;
       });
+
+      const songStartIndex = artistLine.length + songGap.length;
+      if (fullLine.length > songStartIndex) {
+        const songStartX = textX + titlePrefixWidth(probe, fullLine, songStartIndex);
+        const songWidth = titleSliceWidth(probe, fullLine, songStartIndex, fullLine.length);
+        const shield = document.createElement("span");
+        shield.className = "title-song-shield";
+        shield.setAttribute("aria-hidden", "true");
+        shield.style.left = `${songStartX}px`;
+        shield.style.top = `${bandTop}px`;
+        shield.style.width = `${Math.max(0, songWidth)}px`;
+        shield.style.height = `${bandH}px`;
+        titleLinksHost.appendChild(shield);
+      }
     }
 
     function applyNowPlaying(track) {
