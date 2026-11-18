@@ -1055,7 +1055,12 @@
       return track.artists.map((a) => a.name).join(", ");
     }
 
-    function titleArtistLinkAnchor(line) {
+    function titleSegmentWidth(bctx, text) {
+      if (!text) return 0;
+      return muteTextMetrics(bctx, text, fontSize, TITLE_LETTER_SPACING).width;
+    }
+
+    function titleLinkLayout(line) {
       const probe = layers.white.getContext("2d");
       const block = titleLineMetrics(probe, line);
       if (!block) return null;
@@ -1083,21 +1088,21 @@
 
       const artistLine = artistLineFor(track).toUpperCase();
       const song = track.song.toUpperCase();
-      const line = titleLineText(artistLine, song);
-      const anchor = titleArtistLinkAnchor(line);
-      if (!anchor) return;
+      const fullLine = titleLineText(artistLine, song);
+      const layout = titleLinkLayout(fullLine);
+      if (!layout) return;
 
-      const { textX, bandTop, bandH, probe } = anchor;
-      probe.letterSpacing = TITLE_LETTER_SPACING;
-      probe.font = fontOf(fontSize);
-      probe.textAlign = "left";
+      const { textX, bandTop, bandH, probe } = layout;
+      const artistSep = ", ";
+      let cursorX = textX;
 
-      let artistPrefix = "";
-      track.artists.forEach((artist) => {
-        if (artistPrefix) artistPrefix += ", ";
+      track.artists.forEach((artist, index) => {
+        if (index > 0) {
+          cursorX += titleSegmentWidth(probe, artistSep);
+        }
+
         const label = artist.name.toUpperCase();
-        const startX = textX + probe.measureText(artistPrefix).width;
-        const w = probe.measureText(label).width;
+        const nameWidth = titleSegmentWidth(probe, label);
 
         const a = document.createElement("a");
         a.href = artist.href;
@@ -1105,13 +1110,13 @@
         a.rel = "noopener noreferrer";
         a.textContent = label;
         a.setAttribute("aria-label", `${artist.name} on Instagram`);
-        a.style.left = `${startX}px`;
+        a.style.left = `${cursorX}px`;
         a.style.top = `${bandTop}px`;
-        a.style.width = `${w}px`;
+        a.style.width = `${nameWidth}px`;
         a.style.height = `${bandH}px`;
         titleLinksHost.appendChild(a);
 
-        artistPrefix += label;
+        cursorX += nameWidth;
       });
     }
 
