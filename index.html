@@ -114,16 +114,18 @@
 
     .title-links a {
       position: absolute;
+      z-index: 2;
       pointer-events: auto;
       opacity: 0;
       overflow: hidden;
-      clip: rect(0, 0, 0, 0);
-      clip-path: inset(50%);
       white-space: nowrap;
+      cursor: pointer;
     }
 
-    .title-links .title-song-shield {
+    .title-links .title-song-shield,
+    .title-links .title-gap-shield {
       position: absolute;
+      z-index: 1;
       pointer-events: auto;
       cursor: default;
       background: transparent;
@@ -1111,20 +1113,16 @@
       if (!layout) return;
 
       const { textX, bandTop, bandH, probe } = layout;
-      const songGap = "   ";
+      const songGapLen = 3;
 
-      let scanAt = 0;
+      let charIndex = 0;
       track.artists.forEach((artist, index) => {
-        if (index > 0) {
-          if (artistLine.startsWith(", ", scanAt)) scanAt += 2;
-          else if (artistLine[scanAt] === ",") scanAt += 1;
-        }
-
+        if (index > 0) charIndex += 2;
         const label = artist.name.toUpperCase();
-        const start = artistLine.indexOf(label, scanAt);
-        if (start < 0) return;
+        const start = charIndex;
         const end = start + label.length;
-        scanAt = end;
+        charIndex = end;
+        if (end > artistLine.length) return;
 
         const nameWidth = titleSliceWidth(probe, fullLine, start, end);
         const startX = textX + titlePrefixWidth(probe, fullLine, start);
@@ -1136,23 +1134,31 @@
         a.setAttribute("aria-label", `${artist.name} on Instagram`);
         a.style.left = `${startX}px`;
         a.style.top = `${bandTop}px`;
-        a.style.width = `${Math.max(0, nameWidth)}px`;
+        a.style.width = `${Math.max(1, nameWidth)}px`;
         a.style.height = `${bandH}px`;
         titleLinksHost.appendChild(a);
       });
 
-      const songStartIndex = artistLine.length + songGap.length;
-      if (fullLine.length > songStartIndex) {
-        const songStartX = textX + titlePrefixWidth(probe, fullLine, songStartIndex);
-        const songWidth = titleSliceWidth(probe, fullLine, songStartIndex, fullLine.length);
+      const gapStart = artistLine.length;
+      const gapEnd = gapStart + songGapLen;
+      const songStart = gapEnd;
+      const songEnd = fullLine.length;
+
+      const addShield = (className, startIndex, endIndex) => {
+        if (endIndex <= startIndex) return;
         const shield = document.createElement("span");
-        shield.className = "title-song-shield";
+        shield.className = className;
         shield.setAttribute("aria-hidden", "true");
-        shield.style.left = `${songStartX}px`;
+        shield.style.left = `${textX + titlePrefixWidth(probe, fullLine, startIndex)}px`;
         shield.style.top = `${bandTop}px`;
-        shield.style.width = `${Math.max(0, songWidth)}px`;
+        shield.style.width = `${Math.max(0, titleSliceWidth(probe, fullLine, startIndex, endIndex))}px`;
         shield.style.height = `${bandH}px`;
         titleLinksHost.appendChild(shield);
+      };
+
+      addShield("title-gap-shield", gapStart, gapEnd);
+      if (songEnd > songStart) {
+        addShield("title-song-shield", songStart, songEnd);
       }
     }
 
