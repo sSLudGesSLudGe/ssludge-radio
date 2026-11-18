@@ -235,17 +235,20 @@
     <div class="title-links" id="title-links"></div>
   </div>
   <script>
-    const RADIO_MP3 =
-      "https://pub-2e7d1f1d1dd143109a88140a32dca5bf.r2.dev/1%20sSLudGe%20-%20Making%20film%20MP3.mp3";
-    const MIX_DURATION_SEC = 53 * 60 + 38;
-
     // Broadcast epoch — edit this single value to reschedule (ISO 8601 with UTC offset).
     const BROADCAST_START_ISO = "2026-11-18T11:00:00-06:00";
     const BROADCAST_START_MS = Date.parse(BROADCAST_START_ISO);
     const BROADCAST_DRIFT_THRESHOLD_SEC = 2;
     const BROADCAST_DRIFT_MIN_INTERVAL_MS = 15000;
 
-    const mixTracks = [
+    const broadcastMixes = [
+      {
+        number: "001",
+        title: "Making film",
+        mp3:
+          "https://pub-2e7d1f1d1dd143109a88140a32dca5bf.r2.dev/1%20sSLudGe%20-%20Making%20film%20MP3.mp3",
+        durationSec: 53 * 60 + 38,
+        tracks: [
       {
         endSec: 332,
         artists: [
@@ -316,13 +319,102 @@
         song: "Street Pulse Beat - Boy Harsher Remix"
       },
       {
-        endSec: MIX_DURATION_SEC,
+        endSec: 53 * 60 + 38,
         artists: [{ name: "Human Performance Lab", href: "https://www.instagram.com/humanperformancelabmusic" }],
         song: "Achievement"
       }
+        ]
+      },
+      {
+        number: "002",
+        title: "film to ssludge",
+        mp3:
+          "https://pub-2e7d1f1d1dd143109a88140a32dca5bf.r2.dev/2%20sSLudGe%20-%20film%20to%20ssludge.mp3",
+        durationSec: 3109.25,
+        tracks: [
+          {
+            endSec: 346,
+            artists: [
+              { name: "Moderna", href: "https://www.instagram.com/moderna/" },
+              { name: "Theus Mago", href: "https://www.instagram.com/theus_mago/" }
+            ],
+            song: "Wild at Heart"
+          },
+          {
+            endSec: 696,
+            artists: [{ name: "Valerj", href: "https://www.instagram.com/valerj000/" }],
+            song: "It's Time"
+          },
+          {
+            endSec: 1016,
+            artists: [
+              { name: "Emmon", href: "https://www.instagram.com/emmon_music/" },
+              { name: "Kris Baha", href: "https://www.instagram.com/krisbaha/" }
+            ],
+            song: "Relics - Kris Baha Remix"
+          },
+          {
+            endSec: 1344,
+            artists: [{ name: "MOY", href: "https://www.instagram.com/moybassmusic" }],
+            song: "Pale Nimbus"
+          },
+          {
+            endSec: 1560,
+            artists: [{ name: "Will Hofbauer", href: "https://www.instagram.com/willhofbauer/" }],
+            song: "Stair Car"
+          },
+          {
+            endSec: 1826,
+            artists: [{ name: "ELEKTROTECHNIK", href: "https://www.instagram.com/elektrotechnik_official/" }],
+            song: "Illusion"
+          },
+          {
+            endSec: 2231,
+            artists: [{ name: "Felix Leifur", href: "https://www.instagram.com/felixleifur/" }],
+            song: "Brot 7"
+          },
+          {
+            endSec: 2490,
+            artists: [
+              { name: "Madd Rod", href: "https://www.instagram.com/madd_rod/" },
+              { name: "CYRK", href: "https://www.instagram.com/cyrkmusic/" }
+            ],
+            song: "As the Sun Rises East - CYRK Remix"
+          },
+          {
+            endSec: 2786,
+            artists: [{ name: "Carl Finlow", href: "https://www.instagram.com/finlowcarl/?hl=en" }],
+            song: "Fortified"
+          },
+          {
+            endSec: 3109.25,
+            artists: [
+              { name: "Koloah", href: "https://www.instagram.com/koloah/" },
+              { name: "AZARYC", href: "https://www.instagram.com/ricocasazza_music/" }
+            ],
+            song: "Baby Girl - AZARYC Remix"
+          }
+        ]
+      }
     ];
 
-    let nowPlayingIndex = -1;
+    const mixSequenceOffsets = (() => {
+      const offsets = [];
+      let acc = 0;
+      for (const mix of broadcastMixes) {
+        offsets.push(acc);
+        acc += mix.durationSec;
+      }
+      return offsets;
+    })();
+    const BROADCAST_SEQUENCE_DURATION_SEC = mixSequenceOffsets.length
+      ? mixSequenceOffsets[mixSequenceOffsets.length - 1] + broadcastMixes[broadcastMixes.length - 1].durationSec
+      : 0;
+
+    let nowPlayingMixIndex = -1;
+    let nowPlayingTrackIndex = -1;
+    let loadedBroadcastMixIndex = -1;
+    let pendingBroadcastSeekSec = null;
     let playbackUnlocked = false;
     let lastDriftCorrectMs = 0;
     let broadcastWaitTimer = null;
@@ -469,35 +561,74 @@
       return "recover";
     }
 
-    function trackIndexAt(seconds) {
-      for (let i = 0; i < mixTracks.length; i++) {
-        if (seconds < mixTracks[i].endSec) return i;
+    function trackIndexAt(seconds, tracks) {
+      for (let i = 0; i < tracks.length; i++) {
+        if (seconds < tracks[i].endSec) return i;
       }
-      return mixTracks.length - 1;
+      return tracks.length - 1;
     }
 
-    function expectedBroadcastPositionSec(nowMs = Date.now()) {
+    function resolveBroadcastState(nowMs = Date.now()) {
       const elapsed = (nowMs - BROADCAST_START_MS) / 1000;
       if (elapsed < 0) return null;
-      return elapsed % MIX_DURATION_SEC;
+      const seq = elapsed % BROADCAST_SEQUENCE_DURATION_SEC;
+      for (let i = 0; i < broadcastMixes.length; i++) {
+        const start = mixSequenceOffsets[i];
+        const end = start + broadcastMixes[i].durationSec;
+        if (seq < end) {
+          return { mixIndex: i, positionSec: seq - start };
+        }
+      }
+      return { mixIndex: 0, positionSec: 0 };
+    }
+
+    function ensureBroadcastMixLoaded(mixIndex, positionSec) {
+      const mix = broadcastMixes[mixIndex];
+      if (loadedBroadcastMixIndex === mixIndex && bgm.readyState >= 1) {
+        if (!bgm.seeking && Math.abs(bgm.currentTime - positionSec) > 0.05) {
+          bgm.currentTime = positionSec;
+        }
+        return;
+      }
+      loadedBroadcastMixIndex = mixIndex;
+      pendingBroadcastSeekSec = positionSec;
+      bgm.src = mix.mp3;
+      bgm.load();
+    }
+
+    function maybeSwitchBroadcastMix() {
+      const state = resolveBroadcastState();
+      if (!state) return;
+      if (state.mixIndex !== loadedBroadcastMixIndex) {
+        ensureBroadcastMixLoaded(state.mixIndex, state.positionSec);
+      }
     }
 
     function mixPositionSeconds() {
-      const expected = expectedBroadcastPositionSec();
-      if (!Number.isFinite(bgm.duration) || bgm.duration <= 0) {
-        return expected ?? 0;
+      const state = resolveBroadcastState();
+      if (!state) return 0;
+      if (
+        loadedBroadcastMixIndex === state.mixIndex &&
+        Number.isFinite(bgm.duration) &&
+        bgm.duration > 0
+      ) {
+        return bgm.currentTime;
       }
-      const span = Math.min(bgm.duration, MIX_DURATION_SEC);
-      return bgm.currentTime % span;
+      return state.positionSec;
     }
 
     function syncAudioToBroadcast(force = false) {
-      const expected = expectedBroadcastPositionSec();
-      if (expected === null) return false;
+      const state = resolveBroadcastState();
+      if (!state) return false;
 
-      const actual = mixPositionSeconds();
+      ensureBroadcastMixLoaded(state.mixIndex, state.positionSec);
+      if (bgm.readyState < 1) return true;
+
+      const mixDuration = broadcastMixes[state.mixIndex].durationSec;
+      const expected = state.positionSec;
+      const actual = bgm.currentTime;
       let diff = Math.abs(actual - expected);
-      if (diff > MIX_DURATION_SEC / 2) diff = MIX_DURATION_SEC - diff;
+      if (diff > mixDuration / 2) diff = mixDuration - diff;
 
       if (force || diff > BROADCAST_DRIFT_THRESHOLD_SEC) {
         if (bgm.seeking) return true;
@@ -508,15 +639,20 @@
     }
 
     function maybeCorrectBroadcastDrift() {
-      const expected = expectedBroadcastPositionSec();
-      if (expected === null || bgm.paused || bgm.seeking) return;
+      const state = resolveBroadcastState();
+      if (!state || bgm.paused || bgm.seeking) return;
+
+      maybeSwitchBroadcastMix();
+      if (loadedBroadcastMixIndex !== state.mixIndex || bgm.readyState < 1) return;
 
       const now = Date.now();
       if (now - lastDriftCorrectMs < BROADCAST_DRIFT_MIN_INTERVAL_MS) return;
 
-      const actual = mixPositionSeconds();
+      const mixDuration = broadcastMixes[state.mixIndex].durationSec;
+      const expected = state.positionSec;
+      const actual = bgm.currentTime;
       let diff = Math.abs(actual - expected);
-      if (diff > MIX_DURATION_SEC / 2) diff = MIX_DURATION_SEC - diff;
+      if (diff > mixDuration / 2) diff = mixDuration - diff;
 
       if (diff > BROADCAST_DRIFT_THRESHOLD_SEC) {
         bgm.currentTime = expected;
@@ -529,7 +665,7 @@
         clearTimeout(broadcastWaitTimer);
         broadcastWaitTimer = null;
       }
-      if (expectedBroadcastPositionSec() !== null) return;
+      if (resolveBroadcastState() !== null) return;
       const msUntil = BROADCAST_START_MS - Date.now();
       if (msUntil <= 0) return;
       broadcastWaitTimer = setTimeout(() => {
@@ -540,11 +676,15 @@
     }
 
     function syncNowPlayingFromBroadcast() {
-      const t = expectedBroadcastPositionSec() ?? 0;
-      const idx = trackIndexAt(t);
-      if (idx !== nowPlayingIndex) {
-        nowPlayingIndex = idx;
-        applyNowPlaying(mixTracks[idx]);
+      const state = resolveBroadcastState();
+      const mixIndex = state?.mixIndex ?? 0;
+      const t = state?.positionSec ?? 0;
+      const tracks = broadcastMixes[mixIndex].tracks;
+      const idx = trackIndexAt(t, tracks);
+      if (idx !== nowPlayingTrackIndex || mixIndex !== nowPlayingMixIndex) {
+        nowPlayingMixIndex = mixIndex;
+        nowPlayingTrackIndex = idx;
+        applyNowPlaying(tracks[idx]);
       }
     }
 
@@ -627,16 +767,20 @@
         return;
       }
       maybeCorrectBroadcastDrift();
+      const state = resolveBroadcastState();
+      if (!state) return;
+      const tracks = broadcastMixes[state.mixIndex].tracks;
       const t = mixPositionSeconds();
-      const idx = trackIndexAt(t);
-      if (idx !== nowPlayingIndex) {
-        nowPlayingIndex = idx;
-        applyNowPlaying(mixTracks[idx]);
+      const idx = trackIndexAt(t, tracks);
+      if (idx !== nowPlayingTrackIndex || state.mixIndex !== nowPlayingMixIndex) {
+        nowPlayingMixIndex = state.mixIndex;
+        nowPlayingTrackIndex = idx;
+        applyNowPlaying(tracks[idx]);
       }
     }
 
     async function tryStartMutedPlayback() {
-      if (expectedBroadcastPositionSec() === null) {
+      if (resolveBroadcastState() === null) {
         scheduleBroadcastStartCheck();
         syncNowPlayingFromBroadcast();
         return false;
@@ -657,14 +801,23 @@
     function initRadioAudio() {
       if (radioAudioInited) return;
       radioAudioInited = true;
-      bgm.src = RADIO_MP3;
       bgm.preload = "auto";
-      bgm.loop = true;
+      bgm.loop = false;
       bgm.muted = audioMuted;
+
+      const boot = resolveBroadcastState();
+      bgm.src = broadcastMixes[boot?.mixIndex ?? 0].mp3;
 
       bgm.addEventListener("timeupdate", syncNowPlayingFromAudio);
       bgm.addEventListener("play", syncNowPlayingFromAudio);
       bgm.addEventListener("loadedmetadata", () => {
+        const state = resolveBroadcastState();
+        if (state) {
+          loadedBroadcastMixIndex = state.mixIndex;
+          const seekTo = pendingBroadcastSeekSec ?? state.positionSec;
+          pendingBroadcastSeekSec = null;
+          bgm.currentTime = seekTo;
+        }
         syncAudioToBroadcast(true);
         tryStartMutedPlayback();
       });
@@ -1310,10 +1463,12 @@
       probe.letterSpacing = TITLE_LETTER_SPACING;
       probe.font = fontOf(size);
       let tallest = 0;
-      for (const track of mixTracks) {
-        const line = titleLineText(artistLineFor(track).toUpperCase(), track.song.toUpperCase());
-        const { blockH } = titleLineMetrics(probe, line, size);
-        tallest = Math.max(tallest, blockH);
+      for (const mix of broadcastMixes) {
+        for (const track of mix.tracks) {
+          const line = titleLineText(artistLineFor(track).toUpperCase(), track.song.toUpperCase());
+          const { blockH } = titleLineMetrics(probe, line, size);
+          tallest = Math.max(tallest, blockH);
+        }
       }
       return tallest;
     }
@@ -1323,10 +1478,12 @@
       probe.font = fontOf(size);
       const inset = hudPanelInsets(size);
       let widest = 0;
-      for (const track of mixTracks) {
-        const line = titleLineText(artistLineFor(track).toUpperCase(), track.song.toUpperCase());
-        const metrics = muteTextMetrics(probe, line, size, TITLE_LETTER_SPACING);
-        widest = Math.max(widest, inset.x * 2 + metrics.width);
+      for (const mix of broadcastMixes) {
+        for (const track of mix.tracks) {
+          const line = titleLineText(artistLineFor(track).toUpperCase(), track.song.toUpperCase());
+          const metrics = muteTextMetrics(probe, line, size, TITLE_LETTER_SPACING);
+          widest = Math.max(widest, inset.x * 2 + metrics.width);
+        }
       }
       return widest;
     }
@@ -1373,8 +1530,8 @@
       resizeDockBarCanvas(dpr);
       layoutDockSlots();
       syncTitleVerticalPosition();
-      if (nowPlayingIndex >= 0) {
-        layoutTitleLinks(mixTracks[nowPlayingIndex]);
+      if (nowPlayingTrackIndex >= 0 && nowPlayingMixIndex >= 0) {
+        layoutTitleLinks(broadcastMixes[nowPlayingMixIndex].tracks[nowPlayingTrackIndex]);
       }
       syncHudSafeArea();
     }
@@ -1577,8 +1734,8 @@
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       resizeDockBarCanvas(dpr);
       syncTitleVerticalPosition();
-      if (nowPlayingIndex >= 0) {
-        layoutTitleLinks(mixTracks[nowPlayingIndex]);
+      if (nowPlayingTrackIndex >= 0 && nowPlayingMixIndex >= 0) {
+        layoutTitleLinks(broadcastMixes[nowPlayingMixIndex].tracks[nowPlayingTrackIndex]);
       }
     });
 
