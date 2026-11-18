@@ -244,6 +244,9 @@
     const BROADCAST_PRELOAD_LEAD_SEC = 120;
     const BROADCAST_TICK_MS = 200;
     const BROADCAST_PREP_MAX_ATTEMPTS = 5;
+    const BROADCAST_HANDOFF_POLL_MS = 50;
+    const BROADCAST_HANDOFF_BOUNDARY_WAIT_MS = 10000;
+    const BROADCAST_HANDOFF_RECOVERY_WAIT_MS = 20000;
 
     const bgmA = document.getElementById("bgm-a");
     const bgmB = document.getElementById("bgm-b");
@@ -255,6 +258,23 @@
     let broadcastTickTimer = null;
     let boundaryHandoffTimer = null;
     let preloadLeadTimer = null;
+    let handoffRecoveryTimer = null;
+    let handoffRecoveryDeadlineMs = 0;
+    let handoffRecoveryAtBoundary = false;
+
+    function radioLog(level, event, detail = {}) {
+      const payload = { event, t: Date.now(), ...detail };
+      const line = `[sSLudGe-radio] ${event}`;
+      if (level === "error") console.error(line, payload);
+      else if (level === "warn") console.warn(line, payload);
+      else console.info(line, payload);
+      if (typeof window !== "undefined") {
+        if (!window.__radioDiagLog) window.__radioDiagLog = [];
+        window.__radioDiagLog.push({ level, ...payload });
+        const cap = window.__radioDiagLog;
+        if (cap.length > 200) cap.splice(0, cap.length - 200);
+      }
+    }
 
     const broadcastMixes = [
       {
@@ -711,6 +731,7 @@
         }
       });
       el.addEventListener("error", () => {
+        radioLog("error", "slot_media_error", slotReadinessDetail(side, slotSeekTarget[side]));
         if (slotPrepAttempts[side] >= BROADCAST_PREP_MAX_ATTEMPTS) return;
         slotPrepAttempts[side] += 1;
         const mixIndex = slotMixIndex[side];
@@ -724,6 +745,15 @@
       });
     }
 
+    function clearHandoffRecovery() {
+      if (handoffRecoveryTimer !== null) {
+        clearInterval(handoffRecoveryTimer);
+        handoffRecoveryTimer = null;
+      }
+      handoffRecoveryDeadlineMs = 0;
+      handoffRecoveryAtBoundary = false;
+    }
+
     function clearBroadcastSchedulers() {
       if (boundaryHandoffTimer !== null) {
         clearTimeout(boundaryHandoffTimer);
@@ -733,6 +763,101 @@
         clearTimeout(preloadLeadTimer);
         preloadLeadTimer = null;
       }
+    }
+
+    function ensureStandbyPreparedForNextMix(state) {
+      if (!state) return;
+      const nextIdx = nextMixIndex(state.mixIndex);
+      const standby = standbyAudioSide();
+      if (slotMixIndex[standby] !== nextIdx) {
+        prepareAudioSide(standby, nextIdx, 0);
+      } else {
+        applySlotSeek(standby, 0);
+      }
+    }
+
+    function slotReadinessDetail(side, seekSec) {
+      const el = audioSideEl(side);
+      const buf = [];
+      for (let i = 0; i < el.buffered.length; i++) {
+        buf.push({ s: el.buffered.start(i), e: el.buffered.end(i) });
+      }
+      return {
+        side,
+        mixIndex: slotMixIndex[side],
+        seekSec,
+        readyState: el.readyState,
+        paused: el.paused,
+        currentTime: el.currentTime,
+        buffered: buf,
+        playable: isSlotPlayable(side, seekSec)
+      };
+    }
+
+    function completeGaplessHandoff(handoffSide, needIdx, needPos, mode) {
+      const incoming = audioSideEl(handoffSide);
+      const outgoing = activeAudioEl();
+      incoming.muted = audioMuted;
+      applySlotSeek(handoffSide, needPos);
+
+      const playPromise = incoming.play();
+      if (playPromise) {
+        playPromise.catch((err) => {
+          radioLog("warn", "handoff_play_rejected", { mixIndex: needIdx, message: String(err) });
+        });
+      }
+      outgoing.pause();
+
+      activeAudioSide = handoffSide;
+      bgm = activeAudioEl();
+      lastDriftCorrectMs = Date.now();
+
+      const upcoming = nextMixIndex(needIdx);
+      prepareAudioSide(standbyAudioSide(), upcoming, 0);
+      scheduleBoundaryHandoff();
+      syncNowPlayingFromBroadcast();
+      radioLog("info", "handoff_complete", { mode, mixIndex: needIdx, positionSec: needPos, activeSide: handoffSide });
+      return true;
+    }
+
+    function scheduleStandbyHandoffRecovery(handoffSide, needIdx, needPos, atBoundary) {
+      if (handoffRecoveryTimer !== null) return;
+      handoffRecoveryAtBoundary = atBoundary;
+      const waitMs = atBoundary ? BROADCAST_HANDOFF_BOUNDARY_WAIT_MS : BROADCAST_HANDOFF_RECOVERY_WAIT_MS;
+      handoffRecoveryDeadlineMs = Date.now() + waitMs;
+      radioLog("warn", "handoff_standby_not_ready", {
+        ...slotReadinessDetail(handoffSide, needPos),
+        needMixIndex: needIdx,
+        atBoundary,
+        waitMs
+      });
+
+      handoffRecoveryTimer = setInterval(() => {
+        const state = resolveBroadcastState();
+        if (!state || state.mixIndex !== needIdx) {
+          clearHandoffRecovery();
+          performMixHandoffIfNeeded(false);
+          return;
+        }
+        const pos = state.positionSec;
+        if (isSlotPlayable(handoffSide, pos)) {
+          clearHandoffRecovery();
+          completeGaplessHandoff(handoffSide, needIdx, pos, "standby_ready_after_wait");
+          return;
+        }
+        prepareAudioSide(handoffSide, needIdx, pos);
+        applySlotSeek(handoffSide, pos);
+
+        if (Date.now() >= handoffRecoveryDeadlineMs) {
+          clearHandoffRecovery();
+          radioLog("error", "handoff_forced_underbuffered", {
+            ...slotReadinessDetail(handoffSide, pos),
+            needMixIndex: needIdx,
+            atBoundary: handoffRecoveryAtBoundary
+          });
+          completeGaplessHandoff(handoffSide, needIdx, pos, "forced_underbuffered");
+        }
+      }, BROADCAST_HANDOFF_POLL_MS);
     }
 
     function scheduleBoundaryHandoff() {
@@ -766,13 +891,14 @@
 
       const activeMix = slotMixIndex[activeAudioSide];
       if (activeMix === state.mixIndex) {
+        ensureStandbyPreparedForNextMix(state);
         scheduleBoundaryHandoff();
         return false;
       }
 
       const needIdx = state.mixIndex;
       const needPos = state.positionSec;
-      let handoffSide = standbyAudioSide();
+      const handoffSide = standbyAudioSide();
 
       if (slotMixIndex[handoffSide] !== needIdx) {
         prepareAudioSide(handoffSide, needIdx, needPos);
@@ -781,39 +907,12 @@
       }
 
       if (!isSlotPlayable(handoffSide, needPos)) {
-        if (!atBoundary) {
-          prepareAudioSide(handoffSide, needIdx, needPos);
-        }
-        if (!isSlotPlayable(handoffSide, needPos)) {
-          prepareAudioSide(activeAudioSide, needIdx, needPos);
-          applySlotSeek(activeAudioSide, needPos);
-          slotMixIndex[activeAudioSide] = needIdx;
-          syncAudioToBroadcast(true);
-          scheduleBoundaryHandoff();
-          return false;
-        }
+        scheduleStandbyHandoffRecovery(handoffSide, needIdx, needPos, atBoundary);
+        return false;
       }
 
-      const incoming = audioSideEl(handoffSide);
-      const outgoing = activeAudioEl();
-      incoming.muted = audioMuted;
-      applySlotSeek(handoffSide, needPos);
-
-      const playPromise = incoming.play();
-      if (playPromise) {
-        playPromise.catch(() => {});
-      }
-      outgoing.pause();
-
-      activeAudioSide = handoffSide;
-      bgm = activeAudioEl();
-      lastDriftCorrectMs = Date.now();
-
-      const upcoming = nextMixIndex(needIdx);
-      prepareAudioSide(standbyAudioSide(), upcoming, 0);
-      scheduleBoundaryHandoff();
-      syncNowPlayingFromBroadcast();
-      return true;
+      clearHandoffRecovery();
+      return completeGaplessHandoff(handoffSide, needIdx, needPos, "standby_ready");
     }
 
     function recoverBroadcastFromClock(forceHandoff = false) {
@@ -906,15 +1005,16 @@
         return;
       }
 
+      ensureStandbyPreparedForNextMix(state);
       const remain = mixRemainingSec(state);
+      const standby = standbyAudioSide();
       const nextIdx = nextMixIndex(state.mixIndex);
-      if (remain <= BROADCAST_PRELOAD_LEAD_SEC) {
-        const standby = standbyAudioSide();
-        if (slotMixIndex[standby] !== nextIdx) {
-          prepareAudioSide(standby, nextIdx, 0);
-        } else if (!isSlotPlayable(standby, 0)) {
-          applySlotSeek(standby, 0);
-        }
+      if (remain <= BROADCAST_PRELOAD_LEAD_SEC && !isSlotPlayable(standby, 0)) {
+        radioLog("warn", "standby_preload_behind", {
+          remainSec: remain,
+          nextMixIndex: nextIdx,
+          ...slotReadinessDetail(standby, 0)
+        });
       }
     }
 
@@ -1089,6 +1189,7 @@
       bgm = bgmA;
       prepareAudioSide(0, mixIdx, pos);
       prepareAudioSide(1, nextMixIndex(mixIdx), 0);
+      if (boot) ensureStandbyPreparedForNextMix(boot);
 
       bgmA.addEventListener("timeupdate", onAudioPlaybackSignal);
       bgmB.addEventListener("timeupdate", onAudioPlaybackSignal);
