@@ -228,7 +228,8 @@
       </div>
     </div>
   </nav>
-  <audio id="bgm" hidden playsinline></audio>
+  <audio id="bgm-a" hidden playsinline preload="auto"></audio>
+  <audio id="bgm-b" hidden playsinline preload="auto"></audio>
   <div class="title-wrap" id="title-wrap">
     <h1 id="title-heading">Madd Rod, Altered View Dead Man Walking</h1>
     <canvas id="tv" width="1100" height="260" aria-hidden="true"></canvas>
@@ -240,6 +241,20 @@
     const BROADCAST_START_MS = Date.parse(BROADCAST_START_ISO);
     const BROADCAST_DRIFT_THRESHOLD_SEC = 2;
     const BROADCAST_DRIFT_MIN_INTERVAL_MS = 15000;
+    const BROADCAST_PRELOAD_LEAD_SEC = 120;
+    const BROADCAST_TICK_MS = 200;
+    const BROADCAST_PREP_MAX_ATTEMPTS = 5;
+
+    const bgmA = document.getElementById("bgm-a");
+    const bgmB = document.getElementById("bgm-b");
+    let bgm = bgmA;
+    let activeAudioSide = 0;
+    const slotMixIndex = [-1, -1];
+    const slotSeekTarget = [0, 0];
+    const slotPrepAttempts = [0, 0];
+    let broadcastTickTimer = null;
+    let boundaryHandoffTimer = null;
+    let preloadLeadTimer = null;
 
     const broadcastMixes = [
       {
@@ -413,8 +428,6 @@
 
     let nowPlayingMixIndex = -1;
     let nowPlayingTrackIndex = -1;
-    let loadedBroadcastMixIndex = -1;
-    let pendingBroadcastSeekSec = null;
     let playbackUnlocked = false;
     let lastDriftCorrectMs = 0;
     let broadcastWaitTimer = null;
@@ -582,37 +595,252 @@
       return { mixIndex: 0, positionSec: 0 };
     }
 
-    function ensureBroadcastMixLoaded(mixIndex, positionSec) {
-      const mix = broadcastMixes[mixIndex];
-      if (loadedBroadcastMixIndex === mixIndex && bgm.readyState >= 1) {
-        if (!bgm.seeking && Math.abs(bgm.currentTime - positionSec) > 0.05) {
-          bgm.currentTime = positionSec;
-        }
-        return;
-      }
-      loadedBroadcastMixIndex = mixIndex;
-      pendingBroadcastSeekSec = positionSec;
-      bgm.src = mix.mp3;
-      bgm.load();
+    function audioSideEl(side) {
+      return side === 0 ? bgmA : bgmB;
     }
 
-    function maybeSwitchBroadcastMix() {
+    function activeAudioEl() {
+      return audioSideEl(activeAudioSide);
+    }
+
+    function standbyAudioSide() {
+      return 1 - activeAudioSide;
+    }
+
+    function standbyAudioEl() {
+      return audioSideEl(standbyAudioSide());
+    }
+
+    function nextMixIndex(mixIndex) {
+      return (mixIndex + 1) % broadcastMixes.length;
+    }
+
+    function mixRemainingSec(state) {
+      return broadcastMixes[state.mixIndex].durationSec - state.positionSec;
+    }
+
+    function mixMp3Url(mixIndex) {
+      return broadcastMixes[mixIndex].mp3;
+    }
+
+    function mixSrcToken(mixIndex) {
+      return decodeURIComponent(mixMp3Url(mixIndex).split("/").pop() || "");
+    }
+
+    function slotHasMixSrc(el, mixIndex) {
+      if (!el.src) return false;
+      const token = mixSrcToken(mixIndex);
+      return decodeURIComponent(el.src).includes(token);
+    }
+
+    function isBufferedForSeek(el, seekSec) {
+      if (!Number.isFinite(seekSec) || seekSec < 0) return false;
+      if (seekSec <= 0.25 && el.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) return true;
+      const ranges = el.buffered;
+      for (let i = 0; i < ranges.length; i++) {
+        if (seekSec >= ranges.start(i) - 0.35 && seekSec <= ranges.end(i) + 0.5) return true;
+      }
+      return el.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA;
+    }
+
+    function isSlotPlayable(side, seekSec) {
+      const el = audioSideEl(side);
+      if (slotMixIndex[side] < 0) return false;
+      if (el.readyState < HTMLMediaElement.HAVE_METADATA) return false;
+      return isBufferedForSeek(el, seekSec);
+    }
+
+    function applySlotSeek(side, seekSec) {
+      const el = audioSideEl(side);
+      if (el.seeking) return;
+      if (Math.abs(el.currentTime - seekSec) <= 0.05) return;
+      try {
+        el.currentTime = seekSec;
+      } catch {
+        /* ignore invalid seek while loading */
+      }
+    }
+
+    function prepareAudioSide(side, mixIndex, positionSec) {
+      const el = audioSideEl(side);
+      const mix = broadcastMixes[mixIndex];
+      slotSeekTarget[side] = positionSec;
+
+      const already = slotMixIndex[side] === mixIndex && slotHasMixSrc(el, mixIndex);
+      if (already && el.readyState >= HTMLMediaElement.HAVE_METADATA) {
+        applySlotSeek(side, positionSec);
+        return;
+      }
+
+      slotMixIndex[side] = mixIndex;
+      slotPrepAttempts[side] = 0;
+      el.preload = "auto";
+      el.loop = false;
+      el.src = mix.mp3;
+      el.load();
+    }
+
+    function onSlotMediaReady(side) {
+      const el = audioSideEl(side);
+      const mixIndex = slotMixIndex[side];
+      if (mixIndex < 0) return;
+      applySlotSeek(side, slotSeekTarget[side]);
       const state = resolveBroadcastState();
       if (!state) return;
-      if (state.mixIndex !== loadedBroadcastMixIndex) {
-        ensureBroadcastMixLoaded(state.mixIndex, state.positionSec);
+
+      const standby = standbyAudioSide();
+      if (side === standby && mixIndex === nextMixIndex(state.mixIndex) && slotSeekTarget[side] === 0) {
+        return;
       }
+      if (side === activeAudioSide && mixIndex === state.mixIndex && el.paused && state) {
+        /* filled by tryStartMutedPlayback / handoff */
+      }
+    }
+
+    function wireAudioSlot(side) {
+      const el = audioSideEl(side);
+      const bump = () => onSlotMediaReady(side);
+      el.addEventListener("loadedmetadata", bump);
+      el.addEventListener("loadeddata", bump);
+      el.addEventListener("canplay", bump);
+      el.addEventListener("progress", () => {
+        const state = resolveBroadcastState();
+        if (!state) return;
+        if (side === standbyAudioSide() && slotMixIndex[side] === nextMixIndex(state.mixIndex)) {
+          applySlotSeek(side, slotSeekTarget[side]);
+        }
+      });
+      el.addEventListener("error", () => {
+        if (slotPrepAttempts[side] >= BROADCAST_PREP_MAX_ATTEMPTS) return;
+        slotPrepAttempts[side] += 1;
+        const mixIndex = slotMixIndex[side];
+        const seek = slotSeekTarget[side];
+        if (mixIndex >= 0) {
+          setTimeout(() => prepareAudioSide(side, mixIndex, seek), 800 * slotPrepAttempts[side]);
+        }
+      });
+      el.addEventListener("ended", () => {
+        recoverBroadcastFromClock(true);
+      });
+    }
+
+    function clearBroadcastSchedulers() {
+      if (boundaryHandoffTimer !== null) {
+        clearTimeout(boundaryHandoffTimer);
+        boundaryHandoffTimer = null;
+      }
+      if (preloadLeadTimer !== null) {
+        clearTimeout(preloadLeadTimer);
+        preloadLeadTimer = null;
+      }
+    }
+
+    function scheduleBoundaryHandoff() {
+      clearBroadcastSchedulers();
+      const state = resolveBroadcastState();
+      if (!state) return;
+
+      const remainMs = mixRemainingSec(state) * 1000;
+      const nextIdx = nextMixIndex(state.mixIndex);
+      const preloadDelay = Math.max(0, remainMs - BROADCAST_PRELOAD_LEAD_SEC * 1000);
+
+      preloadLeadTimer = setTimeout(() => {
+        preloadLeadTimer = null;
+        prepareAudioSide(standbyAudioSide(), nextIdx, 0);
+      }, preloadDelay);
+
+      if (remainMs <= BROADCAST_PRELOAD_LEAD_SEC * 1000) {
+        prepareAudioSide(standbyAudioSide(), nextIdx, 0);
+      }
+
+      boundaryHandoffTimer = setTimeout(() => {
+        boundaryHandoffTimer = null;
+        performMixHandoffIfNeeded(true);
+        scheduleBoundaryHandoff();
+      }, Math.max(0, remainMs));
+    }
+
+    function performMixHandoffIfNeeded(atBoundary = false) {
+      const state = resolveBroadcastState();
+      if (!state) return false;
+
+      const activeMix = slotMixIndex[activeAudioSide];
+      if (activeMix === state.mixIndex) {
+        scheduleBoundaryHandoff();
+        return false;
+      }
+
+      const needIdx = state.mixIndex;
+      const needPos = state.positionSec;
+      let handoffSide = standbyAudioSide();
+
+      if (slotMixIndex[handoffSide] !== needIdx) {
+        prepareAudioSide(handoffSide, needIdx, needPos);
+      } else {
+        applySlotSeek(handoffSide, needPos);
+      }
+
+      if (!isSlotPlayable(handoffSide, needPos)) {
+        if (!atBoundary) {
+          prepareAudioSide(handoffSide, needIdx, needPos);
+        }
+        if (!isSlotPlayable(handoffSide, needPos)) {
+          prepareAudioSide(activeAudioSide, needIdx, needPos);
+          applySlotSeek(activeAudioSide, needPos);
+          slotMixIndex[activeAudioSide] = needIdx;
+          syncAudioToBroadcast(true);
+          scheduleBoundaryHandoff();
+          return false;
+        }
+      }
+
+      const incoming = audioSideEl(handoffSide);
+      const outgoing = activeAudioEl();
+      incoming.muted = audioMuted;
+      applySlotSeek(handoffSide, needPos);
+
+      const playPromise = incoming.play();
+      if (playPromise) {
+        playPromise.catch(() => {});
+      }
+      outgoing.pause();
+
+      activeAudioSide = handoffSide;
+      bgm = activeAudioEl();
+      lastDriftCorrectMs = Date.now();
+
+      const upcoming = nextMixIndex(needIdx);
+      prepareAudioSide(standbyAudioSide(), upcoming, 0);
+      scheduleBoundaryHandoff();
+      syncNowPlayingFromBroadcast();
+      return true;
+    }
+
+    function recoverBroadcastFromClock(forceHandoff = false) {
+      const state = resolveBroadcastState();
+      if (!state) return;
+      clearBroadcastSchedulers();
+
+      const activeMix = slotMixIndex[activeAudioSide];
+      if (activeMix !== state.mixIndex || forceHandoff) {
+        performMixHandoffIfNeeded(false);
+      } else {
+        syncAudioToBroadcast(true);
+        scheduleBoundaryHandoff();
+      }
+      syncNowPlayingFromBroadcast();
     }
 
     function mixPositionSeconds() {
       const state = resolveBroadcastState();
       if (!state) return 0;
+      const active = activeAudioEl();
       if (
-        loadedBroadcastMixIndex === state.mixIndex &&
-        Number.isFinite(bgm.duration) &&
-        bgm.duration > 0
+        slotMixIndex[activeAudioSide] === state.mixIndex &&
+        Number.isFinite(active.duration) &&
+        active.duration > 0
       ) {
-        return bgm.currentTime;
+        return active.currentTime;
       }
       return state.positionSec;
     }
@@ -621,18 +849,23 @@
       const state = resolveBroadcastState();
       if (!state) return false;
 
-      ensureBroadcastMixLoaded(state.mixIndex, state.positionSec);
-      if (bgm.readyState < 1) return true;
+      if (slotMixIndex[activeAudioSide] !== state.mixIndex) {
+        return performMixHandoffIfNeeded(false);
+      }
+
+      prepareAudioSide(activeAudioSide, state.mixIndex, state.positionSec);
+      const active = activeAudioEl();
+      if (active.readyState < HTMLMediaElement.HAVE_METADATA) return true;
 
       const mixDuration = broadcastMixes[state.mixIndex].durationSec;
       const expected = state.positionSec;
-      const actual = bgm.currentTime;
+      const actual = active.currentTime;
       let diff = Math.abs(actual - expected);
       if (diff > mixDuration / 2) diff = mixDuration - diff;
 
       if (force || diff > BROADCAST_DRIFT_THRESHOLD_SEC) {
-        if (bgm.seeking) return true;
-        bgm.currentTime = expected;
+        if (active.seeking) return true;
+        applySlotSeek(activeAudioSide, expected);
         lastDriftCorrectMs = Date.now();
       }
       return true;
@@ -640,24 +873,54 @@
 
     function maybeCorrectBroadcastDrift() {
       const state = resolveBroadcastState();
-      if (!state || bgm.paused || bgm.seeking) return;
+      if (!state) return;
 
-      maybeSwitchBroadcastMix();
-      if (loadedBroadcastMixIndex !== state.mixIndex || bgm.readyState < 1) return;
+      const active = activeAudioEl();
+      if (slotMixIndex[activeAudioSide] !== state.mixIndex) {
+        performMixHandoffIfNeeded(false);
+        return;
+      }
+      if (active.paused || active.seeking) return;
 
       const now = Date.now();
       if (now - lastDriftCorrectMs < BROADCAST_DRIFT_MIN_INTERVAL_MS) return;
 
       const mixDuration = broadcastMixes[state.mixIndex].durationSec;
       const expected = state.positionSec;
-      const actual = bgm.currentTime;
+      const actual = active.currentTime;
       let diff = Math.abs(actual - expected);
       if (diff > mixDuration / 2) diff = mixDuration - diff;
 
       if (diff > BROADCAST_DRIFT_THRESHOLD_SEC) {
-        bgm.currentTime = expected;
+        applySlotSeek(activeAudioSide, expected);
         lastDriftCorrectMs = now;
       }
+    }
+
+    function broadcastAudioTick() {
+      const state = resolveBroadcastState();
+      if (!state) return;
+
+      if (slotMixIndex[activeAudioSide] !== state.mixIndex) {
+        performMixHandoffIfNeeded(false);
+        return;
+      }
+
+      const remain = mixRemainingSec(state);
+      const nextIdx = nextMixIndex(state.mixIndex);
+      if (remain <= BROADCAST_PRELOAD_LEAD_SEC) {
+        const standby = standbyAudioSide();
+        if (slotMixIndex[standby] !== nextIdx) {
+          prepareAudioSide(standby, nextIdx, 0);
+        } else if (!isSlotPlayable(standby, 0)) {
+          applySlotSeek(standby, 0);
+        }
+      }
+    }
+
+    function startBroadcastAudioLoop() {
+      if (broadcastTickTimer !== null) return;
+      broadcastTickTimer = setInterval(broadcastAudioTick, BROADCAST_TICK_MS);
     }
 
     function scheduleBroadcastStartCheck() {
@@ -762,7 +1025,8 @@
     }
 
     function syncNowPlayingFromAudio() {
-      if (bgm.paused && !playbackUnlocked) {
+      const active = activeAudioEl();
+      if (active.paused && !playbackUnlocked) {
         syncNowPlayingFromBroadcast();
         return;
       }
@@ -786,9 +1050,10 @@
         return false;
       }
       syncAudioToBroadcast(true);
-      bgm.muted = audioMuted;
+      syncBroadcastMuteState();
+      const active = activeAudioEl();
       try {
-        await bgm.play();
+        await active.play();
         syncNowPlayingFromAudio();
       } catch {
         return false;
@@ -796,36 +1061,67 @@
       return true;
     }
 
+    function syncBroadcastMuteState() {
+      bgmA.muted = audioMuted;
+      bgmB.muted = audioMuted;
+    }
+
+    function onAudioPlaybackSignal() {
+      syncNowPlayingFromAudio();
+    }
+
     let radioAudioInited = false;
 
     function initRadioAudio() {
       if (radioAudioInited) return;
       radioAudioInited = true;
-      bgm.preload = "auto";
-      bgm.loop = false;
-      bgm.muted = audioMuted;
+
+      wireAudioSlot(0);
+      wireAudioSlot(1);
+      bgmA.loop = false;
+      bgmB.loop = false;
+      syncBroadcastMuteState();
 
       const boot = resolveBroadcastState();
-      bgm.src = broadcastMixes[boot?.mixIndex ?? 0].mp3;
+      const mixIdx = boot?.mixIndex ?? 0;
+      const pos = boot?.positionSec ?? 0;
+      activeAudioSide = 0;
+      bgm = bgmA;
+      prepareAudioSide(0, mixIdx, pos);
+      prepareAudioSide(1, nextMixIndex(mixIdx), 0);
 
-      bgm.addEventListener("timeupdate", syncNowPlayingFromAudio);
-      bgm.addEventListener("play", syncNowPlayingFromAudio);
-      bgm.addEventListener("loadedmetadata", () => {
-        const state = resolveBroadcastState();
-        if (state) {
-          loadedBroadcastMixIndex = state.mixIndex;
-          const seekTo = pendingBroadcastSeekSec ?? state.positionSec;
-          pendingBroadcastSeekSec = null;
-          bgm.currentTime = seekTo;
+      bgmA.addEventListener("timeupdate", onAudioPlaybackSignal);
+      bgmB.addEventListener("timeupdate", onAudioPlaybackSignal);
+      bgmA.addEventListener("play", onAudioPlaybackSignal);
+      bgmB.addEventListener("play", onAudioPlaybackSignal);
+      bgmA.addEventListener("seeked", onAudioPlaybackSignal);
+      bgmB.addEventListener("seeked", onAudioPlaybackSignal);
+
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") {
+          recoverBroadcastFromClock(true);
         }
-        syncAudioToBroadcast(true);
-        tryStartMutedPlayback();
       });
-      bgm.addEventListener("seeked", syncNowPlayingFromAudio);
+      window.addEventListener("pageshow", (ev) => {
+        if (ev.persisted) recoverBroadcastFromClock(true);
+      });
+      window.addEventListener("focus", () => recoverBroadcastFromClock(false));
 
       syncNowPlayingFromBroadcast();
       scheduleBroadcastStartCheck();
-      tryStartMutedPlayback();
+      scheduleBoundaryHandoff();
+      startBroadcastAudioLoop();
+
+      const startWhenReady = () => {
+        syncAudioToBroadcast(true);
+        tryStartMutedPlayback();
+      };
+      if (bgmA.readyState >= HTMLMediaElement.HAVE_METADATA) {
+        startWhenReady();
+      } else {
+        bgmA.addEventListener("loadedmetadata", startWhenReady, { once: true });
+      }
+
       scheduleTitleGlitch();
       scheduleScreenGlitch();
     }
@@ -1698,14 +1994,13 @@
 
     const muteButton = document.getElementById("mute");
     const muteLabel = document.getElementById("mute-label");
-    const bgm = document.getElementById("bgm");
 
     function syncMuteUi() {
       muteLabelText = audioMuted ? "Unmute" : "Mute";
       muteLabel.textContent = muteLabelText;
       muteButton.setAttribute("aria-pressed", String(!audioMuted));
       muteButton.setAttribute("aria-label", audioMuted ? "Unmute audio" : "Mute audio");
-      bgm.muted = audioMuted;
+      syncBroadcastMuteState();
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       resizeMuteCanvas(dpr);
       resizeTimeCanvas(dpr);
@@ -1723,7 +2018,7 @@
       syncMuteUi();
       playbackUnlocked = true;
       syncAudioToBroadcast(true);
-      if (bgm.paused) {
+      if (activeAudioEl().paused) {
         await tryStartMutedPlayback();
       }
     });
