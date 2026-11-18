@@ -102,11 +102,13 @@
       display: block;
       width: 1100px;
       height: 260px;
+      pointer-events: none;
     }
 
     .title-links {
       position: absolute;
       inset: 0;
+      z-index: 1;
       pointer-events: none;
     }
 
@@ -237,6 +239,12 @@
       "https://pub-2e7d1f1d1dd143109a88140a32dca5bf.r2.dev/1%20sSLudGe%20-%20Making%20film%20MP3.mp3";
     const MIX_DURATION_SEC = 53 * 60 + 38;
 
+    // Broadcast epoch — edit this single value to reschedule (ISO 8601 with UTC offset).
+    const BROADCAST_START_ISO = "2026-11-18T11:00:00-06:00";
+    const BROADCAST_START_MS = Date.parse(BROADCAST_START_ISO);
+    const BROADCAST_DRIFT_THRESHOLD_SEC = 2;
+    const BROADCAST_DRIFT_MIN_INTERVAL_MS = 15000;
+
     const mixTracks = [
       {
         endSec: 332,
@@ -316,6 +324,8 @@
 
     let nowPlayingIndex = -1;
     let playbackUnlocked = false;
+    let lastDriftCorrectMs = 0;
+    let broadcastWaitTimer = null;
 
     const titleWrap = document.getElementById("title-wrap");
     const titleLinksHost = document.getElementById("title-links");
@@ -466,61 +476,139 @@
       return mixTracks.length - 1;
     }
 
+    function expectedBroadcastPositionSec(nowMs = Date.now()) {
+      const elapsed = (nowMs - BROADCAST_START_MS) / 1000;
+      if (elapsed < 0) return null;
+      return elapsed % MIX_DURATION_SEC;
+    }
+
     function mixPositionSeconds() {
+      const expected = expectedBroadcastPositionSec();
       if (!Number.isFinite(bgm.duration) || bgm.duration <= 0) {
-        return bgm.currentTime;
+        return expected ?? 0;
       }
       const span = Math.min(bgm.duration, MIX_DURATION_SEC);
       return bgm.currentTime % span;
+    }
+
+    function syncAudioToBroadcast(force = false) {
+      const expected = expectedBroadcastPositionSec();
+      if (expected === null) return false;
+
+      const actual = mixPositionSeconds();
+      let diff = Math.abs(actual - expected);
+      if (diff > MIX_DURATION_SEC / 2) diff = MIX_DURATION_SEC - diff;
+
+      if (force || diff > BROADCAST_DRIFT_THRESHOLD_SEC) {
+        if (bgm.seeking) return true;
+        bgm.currentTime = expected;
+        lastDriftCorrectMs = Date.now();
+      }
+      return true;
+    }
+
+    function maybeCorrectBroadcastDrift() {
+      const expected = expectedBroadcastPositionSec();
+      if (expected === null || bgm.paused || bgm.seeking) return;
+
+      const now = Date.now();
+      if (now - lastDriftCorrectMs < BROADCAST_DRIFT_MIN_INTERVAL_MS) return;
+
+      const actual = mixPositionSeconds();
+      let diff = Math.abs(actual - expected);
+      if (diff > MIX_DURATION_SEC / 2) diff = MIX_DURATION_SEC - diff;
+
+      if (diff > BROADCAST_DRIFT_THRESHOLD_SEC) {
+        bgm.currentTime = expected;
+        lastDriftCorrectMs = now;
+      }
+    }
+
+    function scheduleBroadcastStartCheck() {
+      if (broadcastWaitTimer !== null) {
+        clearTimeout(broadcastWaitTimer);
+        broadcastWaitTimer = null;
+      }
+      if (expectedBroadcastPositionSec() !== null) return;
+      const msUntil = BROADCAST_START_MS - Date.now();
+      if (msUntil <= 0) return;
+      broadcastWaitTimer = setTimeout(() => {
+        broadcastWaitTimer = null;
+        syncNowPlayingFromBroadcast();
+        tryStartMutedPlayback();
+      }, Math.min(msUntil, 2147483647));
+    }
+
+    function syncNowPlayingFromBroadcast() {
+      const t = expectedBroadcastPositionSec() ?? 0;
+      const idx = trackIndexAt(t);
+      if (idx !== nowPlayingIndex) {
+        nowPlayingIndex = idx;
+        applyNowPlaying(mixTracks[idx]);
+      }
     }
 
     function artistLineFor(track) {
       return track.artists.map((a) => a.name).join(", ");
     }
 
+    function titleArtistLinkAnchor(line) {
+      const probe = layers.white.getContext("2d");
+      const block = titleLineMetrics(probe, line);
+      if (!block) return null;
+
+      const wCss = canvas.clientWidth || LAYOUT_CSS_W;
+      const hCss = canvas.clientHeight || LAYOUT_TITLE_H;
+      const xScale = wCss / canvas.width;
+      const yScale = hCss / canvas.height;
+      const midYDev = canvas.height * 0.5;
+
+      let textXDev = (canvas.width - block.blockW) / 2 + block.inset.x;
+      textXDev = Math.max(block.inset.x, Math.min(textXDev, canvas.width - block.blockW - block.inset.x));
+      const textX = textXDev * xScale;
+
+      const textYDev = midYDev - block.blockH / 2 + block.inset.y + block.metrics.ascent;
+      const bandTop = (textYDev - block.metrics.ascent) * yScale;
+      const bandH = block.metrics.height * yScale;
+
+      return { textX, bandTop, bandH, probe };
+    }
+
     function layoutTitleLinks(track) {
       if (!titleLinksHost || !canvas) return;
       titleLinksHost.innerHTML = "";
-      const probe = layers.white.getContext("2d");
+
       const artistLine = artistLineFor(track).toUpperCase();
       const song = track.song.toUpperCase();
       const line = titleLineText(artistLine, song);
-      const block = titleLineMetrics(probe, line);
-      if (!block) return;
+      const anchor = titleArtistLinkAnchor(line);
+      if (!anchor) return;
 
-      const canvasCssW = canvas.clientWidth || LAYOUT_CSS_W;
-      const canvasCssH = canvas.clientHeight || LAYOUT_TITLE_H;
-      let textX = (canvasCssW - block.blockW) / 2 + block.inset.x;
-      textX = Math.max(block.inset.x, Math.min(textX, canvasCssW - block.blockW - block.inset.x));
-      const midY = canvasCssH * 0.5;
-      const textY = midY - block.blockH / 2 + block.inset.y + block.metrics.ascent;
-      const bandTop = textY - block.metrics.ascent;
-      const bandH = block.metrics.height;
-
+      const { textX, bandTop, bandH, probe } = anchor;
       probe.letterSpacing = TITLE_LETTER_SPACING;
       probe.font = fontOf(fontSize);
       probe.textAlign = "left";
-      let x = textX;
 
-      track.artists.forEach((artist, index) => {
-        if (index > 0) {
-          const sep = ", ";
-          x += probe.measureText(sep).width;
-        }
+      let artistPrefix = "";
+      track.artists.forEach((artist) => {
+        if (artistPrefix) artistPrefix += ", ";
         const label = artist.name.toUpperCase();
+        const startX = textX + probe.measureText(artistPrefix).width;
         const w = probe.measureText(label).width;
+
         const a = document.createElement("a");
         a.href = artist.href;
         a.target = "_blank";
         a.rel = "noopener noreferrer";
         a.textContent = label;
         a.setAttribute("aria-label", `${artist.name} on Instagram`);
-        a.style.left = `${x}px`;
+        a.style.left = `${startX}px`;
         a.style.top = `${bandTop}px`;
         a.style.width = `${w}px`;
         a.style.height = `${bandH}px`;
         titleLinksHost.appendChild(a);
-        x += w;
+
+        artistPrefix += label;
       });
     }
 
@@ -534,7 +622,11 @@
     }
 
     function syncNowPlayingFromAudio() {
-      if (bgm.paused && !playbackUnlocked) return;
+      if (bgm.paused && !playbackUnlocked) {
+        syncNowPlayingFromBroadcast();
+        return;
+      }
+      maybeCorrectBroadcastDrift();
       const t = mixPositionSeconds();
       const idx = trackIndexAt(t);
       if (idx !== nowPlayingIndex) {
@@ -544,6 +636,12 @@
     }
 
     async function tryStartMutedPlayback() {
+      if (expectedBroadcastPositionSec() === null) {
+        scheduleBroadcastStartCheck();
+        syncNowPlayingFromBroadcast();
+        return false;
+      }
+      syncAudioToBroadcast(true);
       bgm.muted = audioMuted;
       try {
         await bgm.play();
@@ -567,11 +665,13 @@
       bgm.addEventListener("timeupdate", syncNowPlayingFromAudio);
       bgm.addEventListener("play", syncNowPlayingFromAudio);
       bgm.addEventListener("loadedmetadata", () => {
+        syncAudioToBroadcast(true);
         tryStartMutedPlayback();
       });
+      bgm.addEventListener("seeked", syncNowPlayingFromAudio);
 
-      applyNowPlaying(mixTracks[0]);
-      nowPlayingIndex = 0;
+      syncNowPlayingFromBroadcast();
+      scheduleBroadcastStartCheck();
       tryStartMutedPlayback();
       scheduleTitleGlitch();
       scheduleScreenGlitch();
@@ -1465,6 +1565,7 @@
       audioMuted = !audioMuted;
       syncMuteUi();
       playbackUnlocked = true;
+      syncAudioToBroadcast(true);
       if (bgm.paused) {
         await tryStartMutedPlayback();
       }
