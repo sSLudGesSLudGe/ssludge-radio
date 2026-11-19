@@ -771,6 +771,8 @@
     function applySlotSeek(side, seekSec) {
       const el = audioSideEl(side);
       if (el.seeking) return;
+      if (el.readyState < HTMLMediaElement.HAVE_METADATA) return;
+      if (el.error) return;
       if (Math.abs(el.currentTime - seekSec) <= 0.05) return;
       try {
         el.currentTime = seekSec;
@@ -785,8 +787,10 @@
       slotSeekTarget[side] = positionSec;
 
       const already = slotMixIndex[side] === mixIndex && slotHasMixSrc(el, mixIndex);
-      if (already && el.readyState >= HTMLMediaElement.HAVE_METADATA) {
-        applySlotSeek(side, positionSec);
+      if (already) {
+        if (el.readyState >= HTMLMediaElement.HAVE_METADATA) {
+          applySlotSeek(side, positionSec);
+        }
         return;
       }
 
@@ -794,15 +798,28 @@
       slotPrepAttempts[side] = 0;
       el.preload = "auto";
       el.loop = false;
+      if (el.error) {
+        el.pause();
+        el.removeAttribute("src");
+        el.load();
+      }
       el.src = mix.mp3;
       el.load();
+    }
+
+    function tryApplySlotSeekWhenReady(side) {
+      const el = audioSideEl(side);
+      const seek = slotSeekTarget[side];
+      if (el.readyState < HTMLMediaElement.HAVE_METADATA) return;
+      if (seek > 0.25 && !isBufferedForSeek(el, seek)) return;
+      applySlotSeek(side, seek);
     }
 
     function onSlotMediaReady(side) {
       const el = audioSideEl(side);
       const mixIndex = slotMixIndex[side];
       if (mixIndex < 0) return;
-      applySlotSeek(side, slotSeekTarget[side]);
+      tryApplySlotSeekWhenReady(side);
       const state = resolveBroadcastState();
       if (!state) return;
 
@@ -825,14 +842,9 @@
       const el = audioSideEl(side);
       const bump = () => onSlotMediaReady(side);
       el.addEventListener("loadedmetadata", bump);
-      el.addEventListener("loadeddata", bump);
       el.addEventListener("canplay", bump);
       el.addEventListener("progress", () => {
-        const state = resolveBroadcastState();
-        if (!state) return;
-        if (side === standbyAudioSide() && slotMixIndex[side] === nextMixIndex(state.mixIndex)) {
-          applySlotSeek(side, slotSeekTarget[side]);
-        }
+        tryApplySlotSeekWhenReady(side);
       });
       el.addEventListener("error", () => {
         radioLog("error", "slot_media_error", slotReadinessDetail(side, slotSeekTarget[side]));
@@ -840,9 +852,11 @@
         slotPrepAttempts[side] += 1;
         const mixIndex = slotMixIndex[side];
         const seek = slotSeekTarget[side];
-        if (mixIndex >= 0) {
-          setTimeout(() => prepareAudioSide(side, mixIndex, seek), 800 * slotPrepAttempts[side]);
-        }
+        if (mixIndex < 0) return;
+        setTimeout(() => {
+          resetAudioSlot(side);
+          prepareAudioSide(side, mixIndex, seek);
+        }, 800 * slotPrepAttempts[side]);
       });
       el.addEventListener("ended", () => {
         recoverBroadcastFromClock(true);
@@ -1068,7 +1082,8 @@
 
       if (force || diff > BROADCAST_DRIFT_THRESHOLD_SEC) {
         if (active.seeking) return true;
-        applySlotSeek(activeAudioSide, expected);
+        slotSeekTarget[activeAudioSide] = expected;
+        tryApplySlotSeekWhenReady(activeAudioSide);
         lastDriftCorrectMs = Date.now();
       }
       return true;
@@ -1095,7 +1110,8 @@
       if (diff > mixDuration / 2) diff = mixDuration - diff;
 
       if (diff > BROADCAST_DRIFT_THRESHOLD_SEC) {
-        applySlotSeek(activeAudioSide, expected);
+        slotSeekTarget[activeAudioSide] = expected;
+        tryApplySlotSeekWhenReady(activeAudioSide);
         lastDriftCorrectMs = now;
       }
     }
@@ -1321,30 +1337,52 @@
       }
     }
 
+    function resetAudioSlot(side) {
+      const el = audioSideEl(side);
+      el.pause();
+      slotMixIndex[side] = -1;
+      slotPrepAttempts[side] = 0;
+      el.removeAttribute("src");
+      el.load();
+    }
+
     function prepareActiveSlotForBroadcast() {
       const state = resolveBroadcastState();
       if (!state) return false;
+      const active = activeAudioEl();
+      if (active.error) {
+        resetAudioSlot(activeAudioSide);
+      }
       prepareAudioSide(activeAudioSide, state.mixIndex, state.positionSec);
       return true;
     }
 
-    function waitForSlotCanPlay(side, timeoutMs = 15000) {
+    function waitUntilSlotPlayable(side, timeoutMs = 25000) {
+      const seek = slotSeekTarget[side];
+      if (isSlotPlayable(side, seek)) return Promise.resolve();
       const el = audioSideEl(side);
-      if (el.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-        return Promise.resolve();
-      }
       return new Promise((resolve, reject) => {
-        const done = () => {
-          clearTimeout(timer);
-          resolve();
+        const tick = () => {
+          tryApplySlotSeekWhenReady(side);
+          if (isSlotPlayable(side, seek)) {
+            cleanup();
+            resolve();
+          }
         };
-        const timer = setTimeout(() => reject(new Error("slot_canplay_timeout")), timeoutMs);
-        el.addEventListener("canplay", done, { once: true });
-        el.addEventListener("loadeddata", done, { once: true });
-        el.addEventListener("error", () => {
+        const cleanup = () => {
           clearTimeout(timer);
-          reject(new Error("slot_media_error"));
-        }, { once: true });
+          el.removeEventListener("progress", tick);
+          el.removeEventListener("canplay", tick);
+          el.removeEventListener("loadedmetadata", tick);
+        };
+        const timer = setTimeout(() => {
+          cleanup();
+          reject(new Error("slot_playable_timeout"));
+        }, timeoutMs);
+        el.addEventListener("progress", tick);
+        el.addEventListener("canplay", tick);
+        el.addEventListener("loadedmetadata", tick);
+        tick();
       });
     }
 
@@ -1359,11 +1397,8 @@
       syncBroadcastMuteState();
       const active = activeAudioEl();
       try {
-        if (active.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
-          await waitForSlotCanPlay(activeAudioSide);
-        }
+        await waitUntilSlotPlayable(activeAudioSide);
         await active.play();
-        await resumeRadioAudioContext();
         syncNowPlayingFromAudio();
       } catch (err) {
         radioLog("warn", "start_playback_rejected", { message: String(err) });
@@ -1656,8 +1691,16 @@
       activeAudioSide = 0;
       bgm = bgmA;
       prepareAudioSide(0, mixIdx, pos);
-      prepareAudioSide(1, nextMixIndex(mixIdx), 0);
-      if (boot) ensureStandbyPreparedForNextMix(boot);
+      const primeStandby = () => {
+        if (!boot) return;
+        prepareAudioSide(1, nextMixIndex(mixIdx), 0);
+        ensureStandbyPreparedForNextMix(boot);
+      };
+      if (bgmA.readyState >= HTMLMediaElement.HAVE_METADATA) {
+        primeStandby();
+      } else {
+        bgmA.addEventListener("loadedmetadata", primeStandby, { once: true });
+      }
 
       bgmA.addEventListener("timeupdate", onAudioPlaybackSignal);
       bgmB.addEventListener("timeupdate", onAudioPlaybackSignal);
@@ -2729,25 +2772,23 @@
       }
     }
 
-    muteButton.addEventListener("click", () => {
+    muteButton.addEventListener("click", async () => {
+      const unmuting = audioMuted;
       audioMuted = !audioMuted;
+      syncMuteUi();
+      playbackUnlocked = true;
+      syncBroadcastMuteState();
 
-      if (!audioMuted) {
-        playbackUnlocked = true;
-        syncBroadcastMuteState();
+      if (unmuting) {
         prepareActiveSlotForBroadcast();
         activeAudioEl().play().catch(() => {});
-        syncMuteUi();
-        void (async () => {
-          const ok = await tryStartMutedPlayback();
-          if (!ok) return;
-          initRadioAudioAnalyser();
-          await resumeRadioAudioContext();
-          attachRadioAnalyserTaps();
-        })();
-      } else {
-        syncMuteUi();
-        syncBroadcastMuteState();
+        syncAudioToBroadcast(true);
+        if (activeAudioEl().paused) {
+          await tryStartMutedPlayback();
+        }
+        initRadioAudioAnalyser();
+        await resumeRadioAudioContext();
+        attachRadioAnalyserTaps();
       }
     });
 
