@@ -1447,17 +1447,28 @@
     }
 
     function mixPositionSeconds() {
-      const state = resolveBroadcastState();
-      if (!state) return 0;
       const active = activeAudioEl();
+      const slotMix = slotMixIndex[activeAudioSide];
       if (
-        slotMixIndex[activeAudioSide] === state.mixIndex &&
-        Number.isFinite(active.duration) &&
-        active.duration > 0
+        slotMix >= 0 &&
+        playbackUnlocked &&
+        !active.paused &&
+        Number.isFinite(active.currentTime)
       ) {
         return active.currentTime;
       }
-      return state.positionSec;
+      const state = resolveBroadcastState();
+      return state?.positionSec ?? 0;
+    }
+
+    function activePlaybackMixIndex() {
+      const active = activeAudioEl();
+      const slotMix = slotMixIndex[activeAudioSide];
+      if (slotMix >= 0 && playbackUnlocked && !active.paused) {
+        return slotMix;
+      }
+      const state = resolveBroadcastState();
+      return state?.mixIndex ?? 0;
     }
 
     function syncAudioToBroadcast(force = false) {
@@ -1469,6 +1480,10 @@
       }
 
       prepareAudioSide(activeAudioSide, state.mixIndex, state.positionSec);
+      if (!force) {
+        return true;
+      }
+
       const active = activeAudioEl();
       if (active.readyState < HTMLMediaElement.HAVE_METADATA) return true;
 
@@ -1477,59 +1492,29 @@
       const actual = active.currentTime;
       const delta = broadcastClockDelta(expected, actual, mixDuration);
       radioDiag("drift_sync_check", {
-        force,
+        force: true,
         expected,
         actual,
         delta,
-        recover: force
+        recover: true
       });
 
-      if (!shouldCorrectDrift(expected, actual, mixDuration, force)) {
+      if (!shouldCorrectDrift(expected, actual, mixDuration, true)) {
         return true;
       }
       if (active.seeking) return true;
       slotSeekTarget[activeAudioSide] = expected;
-      if (tryApplySlotSeekWhenReady(activeAudioSide, !force)) {
+      if (tryApplySlotSeekWhenReady(activeAudioSide, false)) {
         lastDriftCorrectMs = Date.now();
         radioLog("info", "drift_correct", {
           expected,
           actual,
           delta,
-          recover: force,
-          strictSeek: force ? false : true
+          recover: true,
+          strictSeek: false
         });
       }
       return true;
-    }
-
-    function maybeCorrectBroadcastDrift() {
-      const state = resolveBroadcastState();
-      if (!state) return;
-
-      const active = activeAudioEl();
-      if (slotMixIndex[activeAudioSide] !== state.mixIndex) {
-        performMixHandoffIfNeeded(false);
-        return;
-      }
-      if (active.paused || active.seeking) return;
-
-      const now = Date.now();
-      if (now - lastDriftCorrectMs < BROADCAST_DRIFT_MIN_INTERVAL_MS) return;
-
-      const mixDuration = broadcastMixes[state.mixIndex].durationSec;
-      const expected = state.positionSec;
-      const actual = active.currentTime;
-      const delta = broadcastClockDelta(expected, actual, mixDuration);
-      radioDiag("drift_measure", { expected, actual, delta });
-
-      if (!shouldCorrectDrift(expected, actual, mixDuration, false)) {
-        return;
-      }
-      slotSeekTarget[activeAudioSide] = expected;
-      if (tryApplySlotSeekWhenReady(activeAudioSide, true)) {
-        lastDriftCorrectMs = now;
-        radioLog("info", "drift_correct", { expected, actual, delta, recover: false });
-      }
     }
 
     function broadcastAudioTick() {
@@ -1872,14 +1857,16 @@
         syncNowPlayingFromBroadcast();
         return;
       }
-      maybeCorrectBroadcastDrift();
-      const state = resolveBroadcastState();
-      if (!state) return;
-      const tracks = broadcastMixes[state.mixIndex].tracks;
+      const mixIndex = activePlaybackMixIndex();
+      const tracks = broadcastMixes[mixIndex]?.tracks;
+      if (!tracks?.length) {
+        syncNowPlayingFromBroadcast();
+        return;
+      }
       const t = mixPositionSeconds();
       const idx = trackIndexAt(t, tracks);
-      if (idx !== nowPlayingTrackIndex || state.mixIndex !== nowPlayingMixIndex) {
-        nowPlayingMixIndex = state.mixIndex;
+      if (idx !== nowPlayingTrackIndex || mixIndex !== nowPlayingMixIndex) {
+        nowPlayingMixIndex = mixIndex;
         nowPlayingTrackIndex = idx;
         applyNowPlaying(tracks[idx]);
       }
