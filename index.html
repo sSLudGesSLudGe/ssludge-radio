@@ -1097,8 +1097,20 @@
       return Number.isFinite(el.duration) && seekSec < el.duration - 0.05;
     }
 
+    function activePlaybackUndisturbed() {
+      const el = activeAudioEl();
+      return (
+        playbackUnlocked &&
+        !audioMuted &&
+        slotMixIndex[activeAudioSide] >= 0 &&
+        !el.paused &&
+        !el.seeking
+      );
+    }
+
     function applySlotSeek(side, seekSec, strict = true) {
       const el = audioSideEl(side);
+      if (side === activeAudioSide && activePlaybackUndisturbed()) return;
       if (el.seeking) return;
       if (el.readyState < HTMLMediaElement.HAVE_METADATA) return;
       if (el.error) return;
@@ -1135,7 +1147,10 @@
 
       const already = slotMixIndex[side] === mixIndex && slotHasMixSrc(el, mixIndex);
       if (already) {
-        if (el.readyState >= HTMLMediaElement.HAVE_METADATA) {
+        if (
+          !(side === activeAudioSide && activePlaybackUndisturbed()) &&
+          el.readyState >= HTMLMediaElement.HAVE_METADATA
+        ) {
           tryApplySlotSeekWhenReady(side);
         }
         return;
@@ -1163,6 +1178,7 @@
 
     function tryApplySlotSeekWhenReady(side, strict = null) {
       const el = audioSideEl(side);
+      if (side === activeAudioSide && activePlaybackUndisturbed()) return false;
       const seek = slotSeekTarget[side];
       if (!Number.isFinite(seek)) return false;
       if (el.readyState < HTMLMediaElement.HAVE_METADATA) return false;
@@ -1187,7 +1203,9 @@
       const el = audioSideEl(side);
       const mixIndex = slotMixIndex[side];
       if (mixIndex < 0) return;
-      tryApplySlotSeekWhenReady(side);
+      if (!(side === activeAudioSide && activePlaybackUndisturbed())) {
+        tryApplySlotSeekWhenReady(side);
+      }
       const state = resolveBroadcastState();
       if (!state) return;
 
@@ -1467,44 +1485,24 @@
       }
     }
 
-    function mixPositionSeconds() {
-      const active = activeAudioEl();
-      const slotMix = slotMixIndex[activeAudioSide];
-      if (
-        slotMix >= 0 &&
-        playbackUnlocked &&
-        !active.paused &&
-        Number.isFinite(active.currentTime)
-      ) {
-        return active.currentTime;
-      }
-      const state = resolveBroadcastState();
-      return state?.positionSec ?? 0;
-    }
-
-    function activePlaybackMixIndex() {
-      const active = activeAudioEl();
-      const slotMix = slotMixIndex[activeAudioSide];
-      if (slotMix >= 0 && playbackUnlocked && !active.paused) {
-        return slotMix;
-      }
-      const state = resolveBroadcastState();
-      return state?.mixIndex ?? 0;
-    }
 
     function syncAudioToBroadcast(force = false) {
       const state = resolveBroadcastState();
       if (!state) return false;
 
+      if (activePlaybackUndisturbed()) {
+        return true;
+      }
+
       if (slotMixIndex[activeAudioSide] !== state.mixIndex) {
         return performMixHandoffIfNeeded(false);
       }
 
-      prepareAudioSide(activeAudioSide, state.mixIndex, state.positionSec);
       if (!force) {
         return true;
       }
 
+      prepareAudioSide(activeAudioSide, state.mixIndex, state.positionSec);
       const active = activeAudioEl();
       if (active.readyState < HTMLMediaElement.HAVE_METADATA) return true;
 
@@ -1874,17 +1872,18 @@
 
     function syncNowPlayingFromAudio() {
       const active = activeAudioEl();
-      if (active.paused && !playbackUnlocked) {
+      if (!playbackUnlocked || active.paused) {
         syncNowPlayingFromBroadcast();
         return;
       }
-      const mixIndex = activePlaybackMixIndex();
-      const tracks = broadcastMixes[mixIndex]?.tracks;
-      if (!tracks?.length) {
+      const mixIndex = slotMixIndex[activeAudioSide];
+      if (mixIndex < 0) {
         syncNowPlayingFromBroadcast();
         return;
       }
-      const t = mixPositionSeconds();
+      const tracks = broadcastMixes[mixIndex].tracks;
+      const t = active.currentTime;
+      if (!Number.isFinite(t) || t < 0) return;
       const idx = trackIndexAt(t, tracks);
       if (idx !== nowPlayingTrackIndex || mixIndex !== nowPlayingMixIndex) {
         nowPlayingMixIndex = mixIndex;
@@ -1971,10 +1970,6 @@
     function onAudioPlaybackSignal() {
       if (radioAnalyser && radioStreamTaps.length === 0) {
         attachRadioAnalyserTaps();
-      }
-      const active = activeAudioEl();
-      if (!active.paused && playbackUnlocked && slotMixIndex[activeAudioSide] >= 0) {
-        slotSeekTarget[activeAudioSide] = active.currentTime;
       }
       syncNowPlayingFromAudio();
     }
