@@ -225,6 +225,63 @@
       outline: 1px solid rgba(255, 255, 255, 0.45);
       outline-offset: 3px;
     }
+
+  /* Mobile: stack bottom dock row vertically; desktop layout unchanged above this breakpoint */
+    @media (max-width: 767px) {
+      .vcr-dock {
+        left: 0;
+        right: 0;
+        bottom: 0;
+        padding:
+          0
+          max(0.85rem, env(safe-area-inset-right, 0px))
+          max(0.85rem, env(safe-area-inset-bottom, 0px))
+          max(0.85rem, env(safe-area-inset-left, 0px));
+        box-sizing: border-box;
+        overflow: visible;
+      }
+
+      .vcr-dock-bar {
+        display: none;
+      }
+
+      .vcr-dock-inner {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        justify-content: flex-end;
+        gap: 0.55rem;
+        width: 100% !important;
+        min-width: 0 !important;
+        max-width: 100% !important;
+        height: auto !important;
+        box-sizing: border-box;
+      }
+
+      .vcr-dock-inner .vcr-time,
+      .vcr-dock-inner .vcr-date,
+      .vcr-dock-inner .vcr-mute,
+      .vcr-dock-inner .vcr-sludge,
+      .vcr-dock-inner .vcr-brand {
+        position: relative !important;
+        top: auto !important;
+        left: auto !important;
+        right: auto !important;
+        transform: none !important;
+        margin: 0;
+        max-width: 100%;
+        flex-shrink: 0;
+      }
+
+      .vcr-dock-inner canvas {
+        max-width: 100%;
+        height: auto;
+      }
+
+      .vcr-mute {
+        align-self: flex-start;
+      }
+    }
   </style>
 </head>
 <body>
