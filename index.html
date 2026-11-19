@@ -284,6 +284,19 @@
       .vcr-mute {
         align-self: flex-start;
       }
+
+      .title-wrap {
+        width: calc(100% - 2rem);
+        max-width: calc(100% - 2rem);
+        padding: 0 1rem;
+        box-sizing: content-box;
+      }
+
+      .title-wrap canvas {
+        width: 100% !important;
+        max-width: 100%;
+        height: auto !important;
+      }
     }
   </style>
 </head>
@@ -1273,7 +1286,7 @@
       return { artists, gap, song };
     }
 
-    function drawTitleInkSegments(bctx, track, songUpper, textXDev, textY, fillStyle) {
+    function drawTitleInkArtistsOnly(bctx, track, textXDev, textY, fillStyle) {
       bctx.letterSpacing = TITLE_LETTER_SPACING;
       bctx.font = fontOf(fontSize);
       bctx.fillStyle = fillStyle;
@@ -1290,6 +1303,15 @@
         const label = artist.name.toUpperCase();
         bctx.fillText(label, x, textY);
         x += titleSegmentWidth(bctx, label);
+      });
+    }
+
+    function drawTitleInkSegments(bctx, track, songUpper, textXDev, textY, fillStyle) {
+      drawTitleInkArtistsOnly(bctx, track, textXDev, textY, fillStyle);
+      let x = textXDev;
+      track.artists.forEach((artist, index) => {
+        if (index > 0) x += titleSegmentWidth(bctx, ", ");
+        x += titleSegmentWidth(bctx, artist.name.toUpperCase());
       });
       const gap = "   ";
       bctx.fillText(gap, x, textY);
@@ -1319,9 +1341,128 @@
       return { textX, bandTop, bandH, probe };
     }
 
+    function charIndexToCanvasX(bctx, mobile, lines, artistLine, charIndex, canvasWidthDev) {
+      let cursor = 0;
+      for (let li = 0; li < lines.length; li++) {
+        const line = lines[li];
+        const lineStart = cursor;
+        const lineEnd = cursor + line.length;
+        if (charIndex >= lineStart && charIndex <= lineEnd) {
+          const offsetInLine = Math.min(line.length, charIndex - lineStart);
+          const prefix = line.slice(0, offsetInLine);
+          const lineX = centeredLineX(bctx, line, canvasWidthDev);
+          return lineX + muteTextMetrics(bctx, prefix, fontSize, TITLE_LETTER_SPACING).width;
+        }
+        cursor = lineEnd;
+        if (li < lines.length - 1 && cursor < artistLine.length) cursor += 1;
+      }
+      return centeredLineX(bctx, lines[lines.length - 1] || "", canvasWidthDev);
+    }
+
+    function layoutTitleLinksMobile(track) {
+      if (!titleLinksHost || !canvas) return;
+      titleLinksHost.innerHTML = "";
+
+      const song = track.song.toUpperCase();
+      const artistLine = artistLineUpper(track);
+      const probe = layers.white.getContext("2d");
+      const wDev = canvas.width;
+      const wCss = canvas.clientWidth || titleLayoutCssWidth();
+      const hCss = canvas.clientHeight || LAYOUT_TITLE_H;
+      const xScale = wCss / wDev;
+      const yScale = hCss / canvas.height;
+      const mobile = mobileTitleBlockMetrics(probe, artistLine, song, wDev);
+      const midYDev = canvas.height * 0.5;
+      const blockTopDev = midYDev - mobile.blockH / 2;
+      track.artists.forEach((artist, index) => {
+        let charIndex = 0;
+        for (let i = 0; i < index; i++) {
+          charIndex += track.artists[i].name.toUpperCase().length;
+          charIndex += 2;
+        }
+        const label = artist.name.toUpperCase();
+        const start = charIndex;
+        const end = charIndex + label.length;
+        const xStartDev = charIndexToCanvasX(
+          probe,
+          mobile,
+          mobile.artistLines,
+          artistLine,
+          start,
+          wDev
+        );
+        const xEndDev = charIndexToCanvasX(
+          probe,
+          mobile,
+          mobile.artistLines,
+          artistLine,
+          end,
+          wDev
+        );
+        let lineIndex = 0;
+        let cursor = 0;
+        for (let li = 0; li < mobile.artistLines.length; li++) {
+          const line = mobile.artistLines[li];
+          const lineEnd = cursor + line.length;
+          if (start < lineEnd) {
+            lineIndex = li;
+            break;
+          }
+          cursor = lineEnd;
+          if (li < mobile.artistLines.length - 1 && cursor < artistLine.length) cursor += 1;
+        }
+        const bandTop =
+          (lineBaselineY(
+            blockTopDev,
+            mobile.inset,
+            mobile.lineMetrics,
+            lineIndex,
+            mobile.lineH,
+            mobile.lineGap
+          ) -
+            mobile.lineMetrics.ascent) *
+          yScale;
+        const bandH = mobile.lineH * yScale;
+        const left = Math.min(xStartDev, xEndDev) * xScale;
+        const width = Math.max(Math.abs(xEndDev - xStartDev), 1) * xScale;
+        const a = document.createElement("a");
+        a.href = artist.href;
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        a.setAttribute("aria-label", `${artist.name} on Instagram`);
+        a.style.left = `${left}px`;
+        a.style.top = `${bandTop}px`;
+        a.style.width = `${Math.max(1, width)}px`;
+        a.style.height = `${bandH}px`;
+        titleLinksHost.appendChild(a);
+      });
+
+      const songStartY = mobileSongStartYDev(blockTopDev, mobile);
+
+      mobile.songLines.forEach((line, index) => {
+        const lineXDev = centeredLineX(probe, line, wDev);
+        const lineWDev = muteTextMetrics(probe, line, fontSize, TITLE_LETTER_SPACING).width;
+        const yDev =
+          songStartY + index * (mobile.lineH + mobile.lineGap);
+        const shield = document.createElement("span");
+        shield.className = "title-song-shield";
+        shield.setAttribute("aria-hidden", "true");
+        shield.style.left = `${lineXDev * xScale}px`;
+        shield.style.top = `${(yDev - mobile.lineMetrics.ascent) * yScale}px`;
+        shield.style.width = `${lineWDev * xScale}px`;
+        shield.style.height = `${mobile.lineH * yScale}px`;
+        titleLinksHost.appendChild(shield);
+      });
+    }
+
     function layoutTitleLinks(track) {
       if (!titleLinksHost || !canvas) return;
       titleLinksHost.innerHTML = "";
+
+      if (isMobileTitleLayout()) {
+        layoutTitleLinksMobile(track);
+        return;
+      }
 
       const song = track.song.toUpperCase();
       const artistLine = artistLineUpper(track);
@@ -1375,7 +1516,12 @@
       artistText = artistLine.toUpperCase();
       songText = track.song.toUpperCase();
       titleDisplayText = titleLineText(artistText, songText);
-      heading.textContent = titleDisplayText;
+      heading.textContent = isMobileTitleLayout()
+        ? `${artistText}\n${songText}`
+        : titleDisplayText;
+      if (isMobileTitleLayout()) {
+        syncMobileTitleCanvasSize();
+      }
       layoutTitleLinks(track);
     }
 
@@ -2544,6 +2690,101 @@
       return `${artist}   ${song}`;
     }
 
+    const TITLE_MOBILE_MAX_CSS_W = 767;
+    const TITLE_MOBILE_H_PAD = 16;
+
+    function isMobileTitleLayout() {
+      return window.matchMedia(`(max-width: ${TITLE_MOBILE_MAX_CSS_W}px)`).matches;
+    }
+
+    function titleLayoutCssWidth() {
+      if (!isMobileTitleLayout()) return LAYOUT_CSS_W;
+      return Math.max(280, Math.round(window.innerWidth - TITLE_MOBILE_H_PAD * 2));
+    }
+
+    function wrapTitleLineToWidth(bctx, text, maxWidthDev) {
+      if (!text) return [];
+      const words = text.split(/\s+/).filter(Boolean);
+      if (words.length === 0) return [];
+      const lines = [];
+      let current = words[0];
+      for (let i = 1; i < words.length; i++) {
+        const candidate = `${current} ${words[i]}`;
+        const w = muteTextMetrics(bctx, candidate, fontSize, TITLE_LETTER_SPACING).width;
+        if (w > maxWidthDev && current) {
+          lines.push(current);
+          current = words[i];
+        } else {
+          current = candidate;
+        }
+      }
+      lines.push(current);
+      return lines;
+    }
+
+    function mobileTitleBlockMetrics(bctx, artist, song, canvasWidthDev) {
+      const inset = hudPanelInsets(fontSize);
+      const lineMetrics = muteTextMetrics(bctx, "Hg", fontSize, TITLE_LETTER_SPACING);
+      const lineH = lineMetrics.height;
+      const lineGap = Math.round(fontSize * 0.14);
+      const blockGap = Math.round(fontSize * 0.34);
+      const maxTextW = Math.max(40, canvasWidthDev - inset.x * 4);
+      const artistLines = wrapTitleLineToWidth(bctx, artist, maxTextW);
+      const songLines = wrapTitleLineToWidth(bctx, song, maxTextW);
+      let contentW = 0;
+      for (const line of artistLines.concat(songLines)) {
+        contentW = Math.max(
+          contentW,
+          muteTextMetrics(bctx, line, fontSize, TITLE_LETTER_SPACING).width
+        );
+      }
+      const blockW = inset.x * 2 + contentW;
+      const wrappedLineCount = Math.max(0, artistLines.length + songLines.length - 2);
+      const blockH =
+        inset.y * 2 +
+        artistLines.length * lineH +
+        (artistLines.length > 0 && songLines.length > 0 ? blockGap : 0) +
+        songLines.length * lineH +
+        wrappedLineCount * lineGap;
+      return {
+        artistLines,
+        songLines,
+        lineH,
+        lineGap,
+        blockGap,
+        blockW,
+        blockH,
+        inset,
+        lineMetrics,
+        contentW
+      };
+    }
+
+    function centeredLineX(bctx, line, canvasWidthDev) {
+      const w = muteTextMetrics(bctx, line, fontSize, TITLE_LETTER_SPACING).width;
+      return (canvasWidthDev - w) / 2;
+    }
+
+    function lineBaselineY(blockTopDev, inset, lineMetrics, lineIndex, lineH, lineGap) {
+      return blockTopDev + inset.y + lineMetrics.ascent + lineIndex * (lineH + lineGap);
+    }
+
+    function drawWrappedTitleLines(bctx, lines, canvasWidthDev, startY, fillStyle) {
+      bctx.letterSpacing = TITLE_LETTER_SPACING;
+      bctx.font = fontOf(fontSize);
+      bctx.fillStyle = fillStyle;
+      bctx.textAlign = "left";
+      bctx.textBaseline = "alphabetic";
+      const lineH = muteTextMetrics(bctx, "Hg", fontSize, TITLE_LETTER_SPACING).height;
+      const lineGap = Math.round(fontSize * 0.14);
+      lines.forEach((line, index) => {
+        const x = centeredLineX(bctx, line, canvasWidthDev);
+        const y = startY + index * (lineH + lineGap);
+        bctx.fillText(line, x, y);
+      });
+      return { lineH, lineGap };
+    }
+
     function titleLineMetrics(bctx, line, size = fontSize) {
       if (!line) return null;
       bctx.letterSpacing = TITLE_LETTER_SPACING;
@@ -2559,18 +2800,32 @@
       return titleLineMetrics(bctx, titleLineText(artist, song), size);
     }
 
-    function titleBlockHeight(probe, size) {
+    function titleBlockHeight(probe, size, cssW = LAYOUT_CSS_W) {
       probe.letterSpacing = TITLE_LETTER_SPACING;
       probe.font = fontOf(size);
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
       let tallest = 0;
       for (const mix of broadcastMixes) {
         for (const track of mix.tracks) {
-          const line = titleLineText(artistLineFor(track).toUpperCase(), track.song.toUpperCase());
-          const { blockH } = titleLineMetrics(probe, line, size);
-          tallest = Math.max(tallest, blockH);
+          const artist = artistLineFor(track).toUpperCase();
+          const song = track.song.toUpperCase();
+          if (isMobileTitleLayout()) {
+            const { blockH } = mobileTitleBlockMetrics(probe, artist, song, cssW * dpr);
+            tallest = Math.max(tallest, blockH);
+          } else {
+            const line = titleLineText(artist, song);
+            const { blockH } = titleLineMetrics(probe, line, size);
+            tallest = Math.max(tallest, blockH);
+          }
         }
       }
       return tallest;
+    }
+
+    function titleLayoutCssHeight(probe, cssW) {
+      const blockH = titleBlockHeight(probe, fontSize, cssW);
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      return Math.max(LAYOUT_TITLE_H, Math.ceil(blockH / dpr) + 24);
     }
 
     function widestTitleLine(probe, size) {
@@ -2604,8 +2859,21 @@
       const dockBar = document.getElementById("dock-bar-tv");
       if (!titleEl || !dockBar) return;
       const barTop = dockBar.getBoundingClientRect().top;
-      const top = (barTop - LAYOUT_TITLE_H) / 2;
+      const titleH = canvas?.clientHeight || LAYOUT_TITLE_H;
+      const top = (barTop - titleH) / 2;
       titleEl.style.top = `${Math.max(0, Math.round(top))}px`;
+    }
+
+    function mobileSongStartYDev(blockTop, mobile) {
+      const artistStartY = blockTop + mobile.inset.y + mobile.lineMetrics.ascent;
+      const afterArtists =
+        artistStartY +
+        mobile.artistLines.length * mobile.lineH +
+        Math.max(0, mobile.artistLines.length - 1) * mobile.lineGap;
+      if (mobile.artistLines.length > 0 && mobile.songLines.length > 0) {
+        return afterArtists + mobile.blockGap;
+      }
+      return artistStartY;
     }
 
     function resize() {
@@ -2613,10 +2881,17 @@
       fontSize = FIXED_FONT_PX;
       hudFontSize = FIXED_HUD_FONT_PX;
 
-      canvas.width = Math.round(LAYOUT_CSS_W * dpr);
-      canvas.height = Math.round(LAYOUT_TITLE_H * dpr);
-      canvas.style.width = `${LAYOUT_CSS_W}px`;
-      canvas.style.height = `${LAYOUT_TITLE_H}px`;
+      const cssW = titleLayoutCssWidth();
+      const probe = layers.white.getContext("2d");
+      const cssH = isMobileTitleLayout()
+        ? titleLayoutCssHeight(probe, cssW)
+        : LAYOUT_TITLE_H;
+
+      canvas.width = Math.round(cssW * dpr);
+      canvas.height = Math.round(cssH * dpr);
+      canvas.style.width = `${cssW}px`;
+      canvas.style.height = `${cssH}px`;
+      titleWrap.style.width = isMobileTitleLayout() ? `${cssW}px` : "";
       for (const layer of Object.values(layers)) {
         layer.width = canvas.width;
         layer.height = canvas.height;
@@ -2636,8 +2911,55 @@
       syncHudSafeArea();
     }
 
+    function syncMobileTitleCanvasSize() {
+      if (!isMobileTitleLayout() || !canvas) return;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const cssW = titleLayoutCssWidth();
+      const probe = layers.white.getContext("2d");
+      const cssH = titleLayoutCssHeight(probe, cssW);
+      canvas.width = Math.round(cssW * dpr);
+      canvas.height = Math.round(cssH * dpr);
+      canvas.style.width = `${cssW}px`;
+      canvas.style.height = `${cssH}px`;
+      titleWrap.style.width = `${cssW}px`;
+      for (const layer of Object.values(layers)) {
+        layer.width = canvas.width;
+        layer.height = canvas.height;
+      }
+      syncTitleVerticalPosition();
+    }
+
     function paintTitleBlock(bctx, w, h, fillStyle, withGlow, midY) {
       if (!titleDisplayText) return;
+
+      const track =
+        nowPlayingMixIndex >= 0 && nowPlayingTrackIndex >= 0
+          ? broadcastMixes[nowPlayingMixIndex].tracks[nowPlayingTrackIndex]
+          : null;
+
+      if (isMobileTitleLayout()) {
+        const mobile = mobileTitleBlockMetrics(bctx, artistText, songText, w);
+        const blockTop = midY - mobile.blockH / 2;
+        const blockLeft = (w - mobile.blockW) / 2;
+        drawHudHighlight(bctx, blockLeft, blockTop, mobile.blockW, mobile.blockH, titlePanel);
+
+        const artistStartY = blockTop + mobile.inset.y + mobile.lineMetrics.ascent;
+        if (track && mobile.artistLines.length === 1) {
+          const textX = centeredLineX(bctx, mobile.artistLines[0], w);
+          drawTitleInkArtistsOnly(bctx, track, textX, artistStartY, fillStyle);
+        } else if (mobile.artistLines.length > 0) {
+          drawWrappedTitleLines(bctx, mobile.artistLines, w, artistStartY, fillStyle);
+        }
+
+        drawWrappedTitleLines(
+          bctx,
+          mobile.songLines,
+          w,
+          mobileSongStartYDev(blockTop, mobile),
+          fillStyle
+        );
+        return;
+      }
 
       const block = titleLineMetrics(bctx, titleDisplayText);
       if (!block) return;
@@ -2645,11 +2967,6 @@
       textX = Math.max(block.inset.x, Math.min(textX, w - block.blockW - block.inset.x));
       const blockTop = midY - block.blockH / 2;
       const textY = blockTop + block.inset.y + block.metrics.ascent;
-
-      const track =
-        nowPlayingMixIndex >= 0 && nowPlayingTrackIndex >= 0
-          ? broadcastMixes[nowPlayingMixIndex].tracks[nowPlayingTrackIndex]
-          : null;
 
       if (track) {
         drawHudHighlight(
