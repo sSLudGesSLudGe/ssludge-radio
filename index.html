@@ -107,15 +107,18 @@
       position: fixed;
       z-index: 2;
       left: 50%;
-      width: 1100px;
+      width: min(1100px, calc(100vw - 1.5rem));
+      max-width: 1100px;
       margin: 0;
       transform: translateX(-50%);
+      box-sizing: border-box;
     }
 
     .title-wrap canvas {
       display: block;
-      width: 1100px;
-      height: 260px;
+      width: 100%;
+      max-width: 1100px;
+      height: auto;
       pointer-events: none;
     }
 
@@ -340,7 +343,7 @@
   </div>
   <script>
     // Broadcast epoch — edit this single value to reschedule (ISO 8601 with UTC offset).
-    const BROADCAST_START_ISO = "2026-11-19T12:05:16-06:00";
+    const BROADCAST_START_ISO = "2026-11-19T11:47:32-06:00";
     const BROADCAST_START_MS = Date.parse(BROADCAST_START_ISO);
     const BROADCAST_DRIFT_THRESHOLD_SEC = 8;
     const BROADCAST_DRIFT_RECOVER_THRESHOLD_SEC = 4;
@@ -1805,7 +1808,7 @@
       if (!titleLinksHost || !canvas) return;
       titleLinksHost.innerHTML = "";
 
-      if (isMobileTitleLayout()) {
+      if (useWrappedTitleLayout()) {
         layoutTitleLinksMobile(track);
         return;
       }
@@ -1862,11 +1865,11 @@
       artistText = artistLine.toUpperCase();
       songText = track.song.toUpperCase();
       titleDisplayText = titleLineText(artistText, songText);
-      heading.textContent = isMobileTitleLayout()
+      heading.textContent = useWrappedTitleLayout()
         ? `${artistText}\n${songText}`
         : titleDisplayText;
-      if (isMobileTitleLayout()) {
-        syncMobileTitleCanvasSize();
+      if (useWrappedTitleLayout()) {
+        syncWrappedTitleCanvasSize();
       }
       layoutTitleLinks(track);
     }
@@ -3044,14 +3047,26 @@
 
     const TITLE_MOBILE_MAX_CSS_W = 767;
     const TITLE_MOBILE_H_PAD = 16;
+    const TITLE_DESKTOP_H_PAD = 24;
 
     function isMobileTitleLayout() {
       return window.matchMedia(`(max-width: ${TITLE_MOBILE_MAX_CSS_W}px)`).matches;
     }
 
+    /** Stacked/wrapped artist + song (mobile always; narrower desktop viewports too). */
+    function useWrappedTitleLayout() {
+      if (isMobileTitleLayout()) return true;
+      return window.innerWidth < LAYOUT_CSS_W;
+    }
+
     function titleLayoutCssWidth() {
-      if (!isMobileTitleLayout()) return LAYOUT_CSS_W;
-      return Math.max(280, Math.round(window.innerWidth - TITLE_MOBILE_H_PAD * 2));
+      if (isMobileTitleLayout()) {
+        return Math.max(280, Math.round(window.innerWidth - TITLE_MOBILE_H_PAD * 2));
+      }
+      return Math.min(
+        LAYOUT_CSS_W,
+        Math.max(280, Math.round(window.innerWidth - TITLE_DESKTOP_H_PAD))
+      );
     }
 
     function wrapTitleLineToWidth(bctx, text, maxWidthDev) {
@@ -3161,7 +3176,7 @@
         for (const track of mix.tracks) {
           const artist = artistLineFor(track).toUpperCase();
           const song = track.song.toUpperCase();
-          if (isMobileTitleLayout()) {
+          if (useWrappedTitleLayout()) {
             const { blockH } = mobileTitleBlockMetrics(probe, artist, song, cssW * dpr);
             tallest = Math.max(tallest, blockH);
           } else {
@@ -3176,7 +3191,7 @@
 
     function titleLayoutCssHeight(probe, cssW) {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      if (isMobileTitleLayout() && artistText && songText) {
+      if (useWrappedTitleLayout() && artistText && songText) {
         const { blockH } = mobileTitleBlockMetrics(probe, artistText, songText, cssW * dpr);
         return Math.max(72, Math.ceil(blockH / dpr) + 12);
       }
@@ -3261,7 +3276,7 @@
 
       const cssW = titleLayoutCssWidth();
       const probe = layers.white.getContext("2d");
-      const cssH = isMobileTitleLayout()
+      const cssH = useWrappedTitleLayout()
         ? titleLayoutCssHeight(probe, cssW)
         : LAYOUT_TITLE_H;
 
@@ -3269,8 +3284,10 @@
       canvas.height = Math.round(cssH * dpr);
       canvas.style.width = `${cssW}px`;
       canvas.style.height = `${cssH}px`;
-      if (!isMobileTitleLayout()) {
+      if (isMobileTitleLayout()) {
         titleWrap.style.width = "";
+      } else {
+        titleWrap.style.width = `${cssW}px`;
       }
       for (const layer of Object.values(layers)) {
         layer.width = canvas.width;
@@ -3291,8 +3308,8 @@
       syncHudSafeArea();
     }
 
-    function syncMobileTitleCanvasSize() {
-      if (!isMobileTitleLayout() || !canvas) return;
+    function syncWrappedTitleCanvasSize() {
+      if (!useWrappedTitleLayout() || !canvas) return;
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const cssW = titleLayoutCssWidth();
       const probe = layers.white.getContext("2d");
@@ -3316,7 +3333,7 @@
           ? broadcastMixes[nowPlayingMixIndex].tracks[nowPlayingTrackIndex]
           : null;
 
-      if (isMobileTitleLayout()) {
+      if (useWrappedTitleLayout()) {
         const mobile = mobileTitleBlockMetrics(bctx, artistText, songText, w);
         const blockTop = midY - mobile.blockH / 2;
         const blockLeft = (w - mobile.blockW) / 2;
