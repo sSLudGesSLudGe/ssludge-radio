@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+# ssludge-checkpoint — commit, tag, and push ssludge-radio (GitHub Pages recovery point)
+set -euo pipefail
+
+trap 'printf "\nerror: checkpoint failed at: %s\n" "$BASH_COMMAND" >&2; exit 1' ERR
+
+resolve_real_dir() {
+  local source="$1"
+  local dir
+  while [[ -L "$source" ]]; do
+    dir="$(cd "$(dirname "$source")" && pwd)"
+    source="$(readlink "$source")"
+    [[ "$source" != /* ]] && source="$dir/$source"
+  done
+  cd "$(dirname "$source")" && pwd
+}
+
+SCRIPT_DIR="$(resolve_real_dir "${BASH_SOURCE[0]}")"
+
+if [[ -n "${SSLUDGE_ROOT:-}" ]]; then
+  SSLUDGE_ROOT="$(cd "$SSLUDGE_ROOT" && pwd)"
+else
+  SSLUDGE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+fi
+
+CHECKPOINT_MSG="${1:-}"
+if [[ -z "$CHECKPOINT_MSG" ]]; then
+  echo 'usage: ssludge-checkpoint "Checkpoint description"' >&2
+  exit 1
+fi
+
+TAG="checkpoint-$(date +%Y%m%d-%H%M)"
+PAGES_URL="${SSLUDGE_PAGES_URL:-https://ssludgessludge.github.io/ssludge-radio/}"
+GIT_REMOTE="${SSLUDGE_GIT_REMOTE:-origin}"
+
+log() { printf '%s\n' "$*"; }
+log_step() { printf '  → %s\n' "$*"; }
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
+}
+
+git_dirty() {
+  [[ -n "$(git -C "$1" status --porcelain 2>/dev/null)" ]]
+}
+
+git_current_branch() {
+  git -C "$1" branch --show-current 2>/dev/null || echo "HEAD"
+}
+
+COMMIT_STATUS="no changes"
+BUILD_STATUS="n/a (static site)"
+DEPLOY_STATUS="pending"
+PUSH_STATUS="pending"
+TAG_STATUS="pending"
+
+require_cmd git
+
+[[ -d "$SSLUDGE_ROOT/.git" ]] || die "ssludge-radio repo not found at $SSLUDGE_ROOT"
+
+log "sSLudGe checkpoint"
+log "Repo:    $SSLUDGE_ROOT"
+log "Message: $CHECKPOINT_MSG"
+log "Tag:     $TAG"
+log ""
+
+if git_dirty "$SSLUDGE_ROOT"; then
+  log_step "ssludge-radio: committing changes"
+  git -C "$SSLUDGE_ROOT" add -A
+  git -C "$SSLUDGE_ROOT" commit -m "$CHECKPOINT_MSG"
+  COMMIT_STATUS="committed"
+else
+  log_step "ssludge-radio: working tree clean"
+  COMMIT_STATUS="no changes"
+fi
+
+HEAD_SHA="$(git -C "$SSLUDGE_ROOT" rev-parse --short HEAD)"
+
+if git -C "$SSLUDGE_ROOT" rev-parse "$TAG" >/dev/null 2>&1; then
+  log_step "tag $TAG already exists locally — reusing"
+else
+  log_step "ssludge-radio: tagging $TAG"
+  git -C "$SSLUDGE_ROOT" tag -a "$TAG" -m "$CHECKPOINT_MSG"
+fi
+TAG_STATUS="tagged"
+
+BRANCH="$(git_current_branch "$SSLUDGE_ROOT")"
+log_step "ssludge-radio: pushing $BRANCH to $GIT_REMOTE"
+git -C "$SSLUDGE_ROOT" push "$GIT_REMOTE" "$BRANCH"
+PUSH_STATUS="pushed"
+
+if git -C "$SSLUDGE_ROOT" ls-remote --exit-code --tags "$GIT_REMOTE" "$TAG" >/dev/null 2>&1; then
+  log_step "tag $TAG already on remote — skipping tag push"
+else
+  log_step "ssludge-radio: pushing tag $TAG"
+  git -C "$SSLUDGE_ROOT" push "$GIT_REMOTE" "$TAG" || log_step "tag push skipped (may already exist)"
+fi
+
+DEPLOY_STATUS="GitHub Pages (push to main)"
+
+if [[ "${SSLUDGE_CHECKPOINT_VERIFY_PAGES:-1}" == "1" ]] && command -v curl >/dev/null 2>&1; then
+  log_step "checking $PAGES_URL"
+  if http_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$PAGES_URL")"; then
+    if [[ "$http_code" == "200" ]]; then
+      DEPLOY_STATUS="GitHub Pages OK (HTTP $http_code)"
+    else
+      DEPLOY_STATUS="GitHub Pages responded HTTP $http_code (may still be building)"
+      log_step "non-200 response — new deploy may still be in progress"
+    fi
+  else
+    DEPLOY_STATUS="GitHub Pages check skipped (curl failed)"
+  fi
+fi
+
+log ""
+printf '✓ ssludge-radio\n'
+printf '    commit: %s (%s)\n' "$COMMIT_STATUS" "$HEAD_SHA"
+printf '    build:  %s\n' "$BUILD_STATUS"
+printf '    deploy: %s\n' "$DEPLOY_STATUS"
+printf '    push:   %s\n' "$PUSH_STATUS"
+printf '    tag:    %s\n' "$TAG_STATUS"
+log ""
+log "Checkpoint complete."
+log "Tag: $TAG"
+log "Return: git -C \"$SSLUDGE_ROOT\" checkout $TAG"
+log "Remote: git@github-ssludge:sSLudGesSLudGe/ssludge-radio.git"
