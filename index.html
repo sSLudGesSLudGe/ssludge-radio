@@ -810,8 +810,14 @@
       if (side === standby && mixIndex === nextMixIndex(state.mixIndex) && slotSeekTarget[side] === 0) {
         return;
       }
-      if (side === activeAudioSide && mixIndex === state.mixIndex && el.paused && state) {
-        /* filled by tryStartMutedPlayback / handoff */
+      if (
+        side === activeAudioSide &&
+        mixIndex === state.mixIndex &&
+        el.paused &&
+        playbackUnlocked &&
+        !audioMuted
+      ) {
+        el.play().catch(() => {});
       }
     }
 
@@ -1315,20 +1321,52 @@
       }
     }
 
+    function prepareActiveSlotForBroadcast() {
+      const state = resolveBroadcastState();
+      if (!state) return false;
+      prepareAudioSide(activeAudioSide, state.mixIndex, state.positionSec);
+      return true;
+    }
+
+    function waitForSlotCanPlay(side, timeoutMs = 15000) {
+      const el = audioSideEl(side);
+      if (el.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+        return Promise.resolve();
+      }
+      return new Promise((resolve, reject) => {
+        const done = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        const timer = setTimeout(() => reject(new Error("slot_canplay_timeout")), timeoutMs);
+        el.addEventListener("canplay", done, { once: true });
+        el.addEventListener("loadeddata", done, { once: true });
+        el.addEventListener("error", () => {
+          clearTimeout(timer);
+          reject(new Error("slot_media_error"));
+        }, { once: true });
+      });
+    }
+
     async function tryStartMutedPlayback() {
       if (resolveBroadcastState() === null) {
         scheduleBroadcastStartCheck();
         syncNowPlayingFromBroadcast();
         return false;
       }
+      prepareActiveSlotForBroadcast();
       syncAudioToBroadcast(true);
       syncBroadcastMuteState();
       const active = activeAudioEl();
       try {
+        if (active.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+          await waitForSlotCanPlay(activeAudioSide);
+        }
         await active.play();
         await resumeRadioAudioContext();
         syncNowPlayingFromAudio();
-      } catch {
+      } catch (err) {
+        radioLog("warn", "start_playback_rejected", { message: String(err) });
         return false;
       }
       return true;
@@ -1605,7 +1643,6 @@
     function initRadioAudio() {
       if (radioAudioInited) return;
       radioAudioInited = true;
-      initRadioAudioAnalyser();
 
       wireAudioSlot(0);
       wireAudioSlot(1);
@@ -2698,21 +2735,15 @@
       if (!audioMuted) {
         playbackUnlocked = true;
         syncBroadcastMuteState();
-        syncAudioToBroadcast(true);
-        const active = activeAudioEl();
-        const playPromise = active.play();
-        initRadioAudioAnalyser();
+        prepareActiveSlotForBroadcast();
+        activeAudioEl().play().catch(() => {});
         syncMuteUi();
         void (async () => {
-          try {
-            if (playPromise) await playPromise;
-            await resumeRadioAudioContext();
-            attachRadioAnalyserTaps();
-            syncNowPlayingFromAudio();
-          } catch (err) {
-            radioLog("warn", "unmute_play_rejected", { message: String(err) });
-            await tryStartMutedPlayback();
-          }
+          const ok = await tryStartMutedPlayback();
+          if (!ok) return;
+          initRadioAudioAnalyser();
+          await resumeRadioAudioContext();
+          attachRadioAnalyserTaps();
         })();
       } else {
         syncMuteUi();
