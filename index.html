@@ -842,10 +842,6 @@
     let artistText = "";
     let songText = "";
     let titleDisplayText = "";
-    let titleCssW = 1100;
-    let titleCssH = 260;
-    let titleCanvasDpr = 1;
-
     const SLIDE_HOLD_MS = 8000;
     const SLIDE_GAP_MIN_MS = 3700;
     const SLIDE_GAP_MAX_MS = 4000;
@@ -1670,24 +1666,27 @@
 
     function titleLinkLayout(line) {
       const probe = layers.white.getContext("2d");
-      const block = withTitleCanvasCoords(probe, (ctx) => titleLineMetrics(ctx, line));
+      const block = titleLineMetrics(probe, line);
       if (!block) return null;
 
-      const wCss = titleCssW || canvas.clientWidth || LAYOUT_CSS_W;
-      const hCss = titleCssH || canvas.clientHeight || LAYOUT_TITLE_H;
-      const midYCss = hCss * 0.5;
+      const wCss = canvas.clientWidth || LAYOUT_CSS_W;
+      const hCss = canvas.clientHeight || LAYOUT_TITLE_H;
+      const xScale = wCss / canvas.width;
+      const yScale = hCss / canvas.height;
+      const midYDev = canvas.height * 0.5;
 
-      let textX = (wCss - block.blockW) / 2 + block.inset.x;
-      textX = Math.max(block.inset.x, Math.min(textX, wCss - block.blockW - block.inset.x));
+      let textXDev = (canvas.width - block.blockW) / 2 + block.inset.x;
+      textXDev = Math.max(block.inset.x, Math.min(textXDev, canvas.width - block.blockW - block.inset.x));
+      const textX = textXDev * xScale;
 
-      const textY = midYCss - block.blockH / 2 + block.inset.y + block.metrics.ascent;
-      const bandTop = textY - block.metrics.ascent;
-      const bandH = block.metrics.height;
+      const textYDev = midYDev - block.blockH / 2 + block.inset.y + block.metrics.ascent;
+      const bandTop = (textYDev - block.metrics.ascent) * yScale;
+      const bandH = block.metrics.height * yScale;
 
       return { textX, bandTop, bandH, probe };
     }
 
-    function charIndexToCanvasX(bctx, mobile, lines, artistLine, charIndex, canvasWidthCss) {
+    function charIndexToCanvasX(bctx, mobile, lines, artistLine, charIndex, canvasWidthDev) {
       let cursor = 0;
       for (let li = 0; li < lines.length; li++) {
         const line = lines[li];
@@ -1696,13 +1695,13 @@
         if (charIndex >= lineStart && charIndex <= lineEnd) {
           const offsetInLine = Math.min(line.length, charIndex - lineStart);
           const prefix = line.slice(0, offsetInLine);
-          const lineX = centeredLineX(bctx, line, canvasWidthCss);
+          const lineX = centeredLineX(bctx, line, canvasWidthDev);
           return lineX + muteTextMetrics(bctx, prefix, fontSize, TITLE_LETTER_SPACING).width;
         }
         cursor = lineEnd;
         if (li < lines.length - 1 && cursor < artistLine.length) cursor += 1;
       }
-      return centeredLineX(bctx, lines[lines.length - 1] || "", canvasWidthCss);
+      return centeredLineX(bctx, lines[lines.length - 1] || "", canvasWidthDev);
     }
 
     function layoutTitleLinksMobile(track) {
@@ -1712,13 +1711,14 @@
       const song = track.song.toUpperCase();
       const artistLine = artistLineUpper(track);
       const probe = layers.white.getContext("2d");
-      const wCss = titleCssW || titleLayoutCssWidth();
-      const hCss = titleCssH || LAYOUT_TITLE_H;
-      const mobile = withTitleCanvasCoords(probe, (ctx) =>
-        mobileTitleBlockMetrics(ctx, artistLine, song, wCss)
-      );
-      const midYCss = hCss * 0.5;
-      const blockTopCss = midYCss - mobile.blockH / 2;
+      const wDev = canvas.width;
+      const wCss = canvas.clientWidth || titleLayoutCssWidth();
+      const hCss = canvas.clientHeight || LAYOUT_TITLE_H;
+      const xScale = wCss / wDev;
+      const yScale = hCss / canvas.height;
+      const mobile = mobileTitleBlockMetrics(probe, artistLine, song, wDev);
+      const midYDev = canvas.height * 0.5;
+      const blockTopDev = midYDev - mobile.blockH / 2;
       track.artists.forEach((artist, index) => {
         let charIndex = 0;
         for (let i = 0; i < index; i++) {
@@ -1728,26 +1728,22 @@
         const label = artist.name.toUpperCase();
         const start = charIndex;
         const end = charIndex + label.length;
-        let xStartCss = 0;
-        let xEndCss = 0;
-        withTitleCanvasCoords(probe, (ctx) => {
-          xStartCss = charIndexToCanvasX(
-            ctx,
-            mobile,
-            mobile.artistLines,
-            artistLine,
-            start,
-            wCss
-          );
-          xEndCss = charIndexToCanvasX(
-            ctx,
-            mobile,
-            mobile.artistLines,
-            artistLine,
-            end,
-            wCss
-          );
-        });
+        const xStartDev = charIndexToCanvasX(
+          probe,
+          mobile,
+          mobile.artistLines,
+          artistLine,
+          start,
+          wDev
+        );
+        const xEndDev = charIndexToCanvasX(
+          probe,
+          mobile,
+          mobile.artistLines,
+          artistLine,
+          end,
+          wDev
+        );
         let lineIndex = 0;
         let cursor = 0;
         for (let li = 0; li < mobile.artistLines.length; li++) {
@@ -1761,17 +1757,19 @@
           if (li < mobile.artistLines.length - 1 && cursor < artistLine.length) cursor += 1;
         }
         const bandTop =
-          lineBaselineY(
-            blockTopCss,
+          (lineBaselineY(
+            blockTopDev,
             mobile.inset,
             mobile.lineMetrics,
             lineIndex,
             mobile.lineH,
             mobile.lineGap
-          ) - mobile.lineMetrics.ascent;
-        const bandH = mobile.lineH;
-        const left = Math.min(xStartCss, xEndCss);
-        const width = Math.max(Math.abs(xEndCss - xStartCss), 1);
+          ) -
+            mobile.lineMetrics.ascent) *
+          yScale;
+        const bandH = mobile.lineH * yScale;
+        const left = Math.min(xStartDev, xEndDev) * xScale;
+        const width = Math.max(Math.abs(xEndDev - xStartDev), 1) * xScale;
         const a = document.createElement("a");
         a.href = artist.href;
         a.target = "_blank";
@@ -1784,23 +1782,19 @@
         titleLinksHost.appendChild(a);
       });
 
-      const songStartY = mobileSongStartYDev(blockTopCss, mobile);
+      const songStartY = mobileSongStartYDev(blockTopDev, mobile);
 
       mobile.songLines.forEach((line, index) => {
-        let lineXCss = 0;
-        let lineWCss = 0;
-        withTitleCanvasCoords(probe, (ctx) => {
-          lineXCss = centeredLineX(ctx, line, wCss);
-          lineWCss = muteTextMetrics(ctx, line, fontSize, TITLE_LETTER_SPACING).width;
-        });
-        const yCss = songStartY + index * (mobile.lineH + mobile.lineGap);
+        const lineXDev = centeredLineX(probe, line, wDev);
+        const lineWDev = muteTextMetrics(probe, line, fontSize, TITLE_LETTER_SPACING).width;
+        const yDev = songStartY + index * (mobile.lineH + mobile.lineGap);
         const shield = document.createElement("span");
         shield.className = "title-song-shield";
         shield.setAttribute("aria-hidden", "true");
-        shield.style.left = `${lineXCss}px`;
-        shield.style.top = `${yCss - mobile.lineMetrics.ascent}px`;
-        shield.style.width = `${lineWCss}px`;
-        shield.style.height = `${mobile.lineH}px`;
+        shield.style.left = `${lineXDev * xScale}px`;
+        shield.style.top = `${(yDev - mobile.lineMetrics.ascent) * yScale}px`;
+        shield.style.width = `${lineWDev * xScale}px`;
+        shield.style.height = `${mobile.lineH * yScale}px`;
         titleLinksHost.appendChild(shield);
       });
     }
@@ -1821,13 +1815,14 @@
       if (!layout) return;
 
       const { textX, bandTop, bandH, probe } = layout;
-      const segs = withTitleCanvasCoords(probe, (ctx) =>
-        measureTitleInkSegments(ctx, track, song, textX)
-      );
+      const wCss = canvas.clientWidth || LAYOUT_CSS_W;
+      const xScale = wCss / canvas.width;
+      const textXDev = textX / xScale;
+      const segs = measureTitleInkSegments(probe, track, song, textXDev);
 
-      const toCss = (x, w) => ({
-        left: x,
-        width: Math.max(0, w)
+      const toCss = (xDev, wDev) => ({
+        left: xDev * xScale,
+        width: Math.max(0, wDev * xScale)
       });
 
       const addShield = (className, box) => {
@@ -3053,37 +3048,21 @@
       return window.matchMedia(`(max-width: ${TITLE_MOBILE_MAX_CSS_W}px)`).matches;
     }
 
-    function titleCanvasDprValue() {
-      return titleCanvasDpr || Math.min(window.devicePixelRatio || 1, 2);
-    }
-
-    function withTitleCanvasCoords(bctx, fn) {
-      const dpr = titleCanvasDprValue();
-      bctx.save();
-      bctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      try {
-        return fn(bctx);
-      } finally {
-        bctx.restore();
-      }
-    }
-
-    function titleLineFitsOneRow(artist, song, cssW) {
+    function titleLineFitsOneRow(artist, song, cssW, dpr) {
       if (!artist && !song) return true;
       const probe = layers.white.getContext("2d");
-      return withTitleCanvasCoords(probe, (ctx) => {
-        const block = titleLineMetrics(ctx, titleLineText(artist, song));
-        return block ? block.blockW <= cssW + 2 : true;
-      });
+      const block = titleLineMetrics(probe, titleLineText(artist, song));
+      return block ? block.blockW <= cssW * dpr + 2 : true;
     }
 
-    /** Artist block + song block at full size; word-wrap within each. */
+    /** Artist block + song block; word-wrap at the same bitmap font size as full width. */
     function useWrappedTitleLayout() {
       if (isMobileTitleLayout()) return true;
       const cssW = titleLayoutCssWidth();
       if (cssW < LAYOUT_CSS_W) return true;
       if (artistText && songText) {
-        return !titleLineFitsOneRow(artistText, songText, cssW);
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        return !titleLineFitsOneRow(artistText, songText, cssW, dpr);
       }
       return false;
     }
@@ -3118,13 +3097,13 @@
       return lines;
     }
 
-    function mobileTitleBlockMetrics(bctx, artist, song, canvasWidthCss) {
+    function mobileTitleBlockMetrics(bctx, artist, song, canvasWidthDev) {
       const inset = hudPanelInsets(fontSize);
       const lineMetrics = muteTextMetrics(bctx, "Hg", fontSize, TITLE_LETTER_SPACING);
       const lineH = lineMetrics.height;
       const lineGap = Math.round(fontSize * 0.14);
       const blockGap = Math.round(fontSize * 0.34);
-      const maxTextW = Math.max(40, canvasWidthCss - inset.x * 4);
+      const maxTextW = Math.max(40, canvasWidthDev - inset.x * 4);
       const artistLines = wrapTitleLineToWidth(bctx, artist, maxTextW);
       const songLines = wrapTitleLineToWidth(bctx, song, maxTextW);
       let contentW = 0;
@@ -3156,9 +3135,9 @@
       };
     }
 
-    function centeredLineX(bctx, line, canvasWidthCss) {
+    function centeredLineX(bctx, line, canvasWidthDev) {
       const w = muteTextMetrics(bctx, line, fontSize, TITLE_LETTER_SPACING).width;
-      return (canvasWidthCss - w) / 2;
+      return (canvasWidthDev - w) / 2;
     }
 
     function lineBaselineY(blockTopDev, inset, lineMetrics, lineIndex, lineH, lineGap) {
@@ -3206,10 +3185,8 @@
           const artist = artistLineFor(track).toUpperCase();
           const song = track.song.toUpperCase();
           if (useWrappedTitleLayout()) {
-            withTitleCanvasCoords(probe, (ctx) => {
-              const { blockH } = mobileTitleBlockMetrics(ctx, artist, song, cssW);
-              tallest = Math.max(tallest, blockH);
-            });
+            const { blockH } = mobileTitleBlockMetrics(probe, artist, song, cssW * dpr);
+            tallest = Math.max(tallest, blockH);
           } else {
             const line = titleLineText(artist, song);
             const { blockH } = titleLineMetrics(probe, line, size);
@@ -3223,11 +3200,8 @@
     function titleLayoutCssHeight(probe, cssW) {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       if (useWrappedTitleLayout() && artistText && songText) {
-        let blockH = 0;
-        withTitleCanvasCoords(probe, (ctx) => {
-          blockH = mobileTitleBlockMetrics(ctx, artistText, songText, cssW).blockH;
-        });
-        return Math.max(72, Math.ceil(blockH) + 12);
+        const { blockH } = mobileTitleBlockMetrics(probe, artistText, songText, cssW * dpr);
+        return Math.max(72, Math.ceil(blockH / dpr) + 12);
       }
       const blockH = titleBlockHeight(probe, fontSize, cssW);
       return Math.max(LAYOUT_TITLE_H, Math.ceil(blockH / dpr) + 24);
@@ -3314,9 +3288,6 @@
         ? titleLayoutCssHeight(probe, cssW)
         : LAYOUT_TITLE_H;
 
-      titleCssW = cssW;
-      titleCssH = cssH;
-      titleCanvasDpr = dpr;
       canvas.width = Math.round(cssW * dpr);
       canvas.height = Math.round(cssH * dpr);
       canvas.style.width = `${cssW}px`;
@@ -3351,9 +3322,6 @@
       const cssW = titleLayoutCssWidth();
       const probe = layers.white.getContext("2d");
       const cssH = titleLayoutCssHeight(probe, cssW);
-      titleCssW = cssW;
-      titleCssH = cssH;
-      titleCanvasDpr = dpr;
       canvas.width = Math.round(cssW * dpr);
       canvas.height = Math.round(cssH * dpr);
       canvas.style.width = `${cssW}px`;
@@ -3426,19 +3394,15 @@
     function paintLayers(phase = "normal") {
       const w = canvas.width;
       const h = canvas.height;
-      const dpr = titleCanvasDprValue();
       const shake =
         phase === "distort" ? (Math.random() - 0.5) * 12 : (Math.random() - 0.5) * 0.8;
-      const midY = titleCssH * 0.5 + shake / dpr;
+      const midY = h * 0.5 + shake;
 
       for (const [name, layer] of Object.entries(layers)) {
         const bctx = layer.getContext("2d");
         bctx.clearRect(0, 0, w, h);
         if (phase === "hidden") continue;
-        bctx.save();
-        bctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        paintTitleBlock(bctx, titleCssW, titleCssH, titleColors[name], false, midY);
-        bctx.restore();
+        paintTitleBlock(bctx, w, h, titleColors[name], false, midY);
       }
     }
 
