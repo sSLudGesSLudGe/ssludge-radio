@@ -299,9 +299,6 @@
 
       .title-wrap canvas {
         display: block;
-        width: 100% !important;
-        max-width: 100%;
-        height: auto !important;
         margin: 0 auto;
       }
     }
@@ -3222,11 +3219,27 @@
       return widest;
     }
 
-    const MIN_FONT_PX = 40;
     const LAYOUT_CSS_W = 1100;
     const LAYOUT_TITLE_H = 260;
-    const FIXED_FONT_PX = 40;
     const FIXED_HUD_FONT_PX = 40;
+    const FIXED_FONT_PX = FIXED_HUD_FONT_PX;
+
+    function lockTitleCanvasToLayout(cssW, cssH, dpr) {
+      const bitmapW = Math.round(cssW * dpr);
+      const bitmapH = Math.round(cssH * dpr);
+      canvas.width = bitmapW;
+      canvas.height = bitmapH;
+      canvas.style.width = `${cssW}px`;
+      canvas.style.height = `${cssH}px`;
+      canvas.style.maxWidth = `${cssW}px`;
+      canvas.style.minWidth = `${cssW}px`;
+      titleWrap.style.width = `${cssW}px`;
+      titleWrap.style.maxWidth = `${cssW}px`;
+      for (const layer of Object.values(layers)) {
+        layer.width = bitmapW;
+        layer.height = bitmapH;
+      }
+    }
 
     function syncHudSafeArea() {
       document.body.style.paddingTop = "0";
@@ -3279,7 +3292,6 @@
 
     function resize() {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      fontSize = FIXED_FONT_PX;
       hudFontSize = FIXED_HUD_FONT_PX;
 
       const cssW = titleLayoutCssWidth();
@@ -3288,19 +3300,8 @@
         ? titleLayoutCssHeight(probe, cssW)
         : LAYOUT_TITLE_H;
 
-      canvas.width = Math.round(cssW * dpr);
-      canvas.height = Math.round(cssH * dpr);
-      canvas.style.width = `${cssW}px`;
-      canvas.style.height = `${cssH}px`;
-      if (isMobileTitleLayout()) {
-        titleWrap.style.width = "";
-      } else {
-        titleWrap.style.width = `${cssW}px`;
-      }
-      for (const layer of Object.values(layers)) {
-        layer.width = canvas.width;
-        layer.height = canvas.height;
-      }
+      fontSize = FIXED_FONT_PX;
+      lockTitleCanvasToLayout(cssW, cssH, dpr);
 
       resizeMuteCanvas(dpr);
       resizeTimeCanvas(dpr);
@@ -3322,15 +3323,12 @@
       const cssW = titleLayoutCssWidth();
       const probe = layers.white.getContext("2d");
       const cssH = titleLayoutCssHeight(probe, cssW);
-      canvas.width = Math.round(cssW * dpr);
-      canvas.height = Math.round(cssH * dpr);
-      canvas.style.width = `${cssW}px`;
-      canvas.style.height = `${cssH}px`;
-      for (const layer of Object.values(layers)) {
-        layer.width = canvas.width;
-        layer.height = canvas.height;
-      }
+      fontSize = FIXED_FONT_PX;
+      lockTitleCanvasToLayout(cssW, cssH, dpr);
       syncTitleVerticalPosition();
+      if (nowPlayingTrackIndex >= 0 && nowPlayingMixIndex >= 0) {
+        layoutTitleLinks(broadcastMixes[nowPlayingMixIndex].tracks[nowPlayingTrackIndex]);
+      }
     }
 
     function paintTitleBlock(bctx, w, h, fillStyle, withGlow, midY) {
