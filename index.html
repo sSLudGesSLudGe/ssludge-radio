@@ -286,16 +286,23 @@
       }
 
       .title-wrap {
-        width: calc(100% - 2rem);
-        max-width: calc(100% - 2rem);
-        padding: 0 1rem;
-        box-sizing: content-box;
+        left: 50%;
+        right: auto;
+        width: 100%;
+        max-width: 100vw;
+        margin: 0;
+        padding-left: max(1rem, env(safe-area-inset-left, 0px));
+        padding-right: max(1rem, env(safe-area-inset-right, 0px));
+        box-sizing: border-box;
+        transform: translateX(-50%);
       }
 
       .title-wrap canvas {
+        display: block;
         width: 100% !important;
         max-width: 100%;
         height: auto !important;
+        margin: 0 auto;
       }
     }
   </style>
@@ -2447,6 +2454,9 @@
         left: muteRect.left - dockRect.left,
         width: muteRect.width
       };
+      if (isMobileTitleLayout()) {
+        syncTitleVerticalPosition();
+      }
     }
 
     function dockBarLayout(dpr) {
@@ -2823,8 +2833,12 @@
     }
 
     function titleLayoutCssHeight(probe, cssW) {
-      const blockH = titleBlockHeight(probe, fontSize, cssW);
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      if (isMobileTitleLayout() && artistText && songText) {
+        const { blockH } = mobileTitleBlockMetrics(probe, artistText, songText, cssW * dpr);
+        return Math.max(72, Math.ceil(blockH / dpr) + 12);
+      }
+      const blockH = titleBlockHeight(probe, fontSize, cssW);
       return Math.max(LAYOUT_TITLE_H, Math.ceil(blockH / dpr) + 24);
     }
 
@@ -2856,10 +2870,32 @@
 
     function syncTitleVerticalPosition() {
       const titleEl = document.getElementById("title-wrap");
-      const dockBar = document.getElementById("dock-bar-tv");
-      if (!titleEl || !dockBar) return;
-      const barTop = dockBar.getBoundingClientRect().top;
+      if (!titleEl) return;
       const titleH = canvas?.clientHeight || LAYOUT_TITLE_H;
+
+      if (isMobileTitleLayout()) {
+        const dateEl = document.querySelector(".vcr-date");
+        const bandTop = 0;
+        const bandBottom = dateEl
+          ? dateEl.getBoundingClientRect().top
+          : window.innerHeight * 0.62;
+        const available = Math.max(titleH + 8, bandBottom - bandTop);
+        const top = bandTop + (available - titleH) / 2;
+        titleEl.style.top = `${Math.max(0, Math.round(top))}px`;
+        titleEl.style.left = "50%";
+        titleEl.style.transform = "translateX(-50%)";
+        titleEl.style.width = "100%";
+        titleEl.style.maxWidth = "100vw";
+        return;
+      }
+
+      const dockBar = document.getElementById("dock-bar-tv");
+      if (!dockBar) return;
+      titleEl.style.left = "";
+      titleEl.style.transform = "";
+      titleEl.style.width = "";
+      titleEl.style.maxWidth = "";
+      const barTop = dockBar.getBoundingClientRect().top;
       const top = (barTop - titleH) / 2;
       titleEl.style.top = `${Math.max(0, Math.round(top))}px`;
     }
@@ -2891,7 +2927,9 @@
       canvas.height = Math.round(cssH * dpr);
       canvas.style.width = `${cssW}px`;
       canvas.style.height = `${cssH}px`;
-      titleWrap.style.width = isMobileTitleLayout() ? `${cssW}px` : "";
+      if (!isMobileTitleLayout()) {
+        titleWrap.style.width = "";
+      }
       for (const layer of Object.values(layers)) {
         layer.width = canvas.width;
         layer.height = canvas.height;
@@ -2921,7 +2959,6 @@
       canvas.height = Math.round(cssH * dpr);
       canvas.style.width = `${cssW}px`;
       canvas.style.height = `${cssH}px`;
-      titleWrap.style.width = `${cssW}px`;
       for (const layer of Object.values(layers)) {
         layer.width = canvas.width;
         layer.height = canvas.height;
