@@ -342,8 +342,12 @@
     // Broadcast epoch — edit this single value to reschedule (ISO 8601 with UTC offset).
     const BROADCAST_START_ISO = "2026-11-18T17:00:00-06:00";
     const BROADCAST_START_MS = Date.parse(BROADCAST_START_ISO);
-    const BROADCAST_DRIFT_THRESHOLD_SEC = 2;
-    const BROADCAST_DRIFT_MIN_INTERVAL_MS = 15000;
+    const BROADCAST_DRIFT_THRESHOLD_SEC = 8;
+    const BROADCAST_DRIFT_RECOVER_THRESHOLD_SEC = 4;
+    const BROADCAST_DRIFT_MIN_INTERVAL_MS = 45000;
+    const BROADCAST_SEEK_BUFFER_AHEAD_SEC = 2;
+    const BROADCAST_RECOVERY_DEBOUNCE_MS = 1500;
+    const BROADCAST_SEEK_PROGRESS_DEBOUNCE_MS = 300;
     const BROADCAST_PRELOAD_LEAD_SEC = 120;
     const BROADCAST_TICK_MS = 200;
     const BROADCAST_PREP_MAX_ATTEMPTS = 5;
@@ -358,6 +362,10 @@
     const slotMixIndex = [-1, -1];
     const slotSeekTarget = [0, 0];
     const slotPrepAttempts = [0, 0];
+    const slotSeekProgressLastMs = [0, 0];
+    let broadcastRecoveryPending = false;
+    let lastBroadcastRecoveryMs = 0;
+    let handoffRecoveryExtendCount = 0;
     let broadcastTickTimer = null;
     let boundaryHandoffTimer = null;
     let preloadLeadTimer = null;
@@ -376,6 +384,113 @@
         window.__radioDiagLog.push({ level, ...payload });
         const cap = window.__radioDiagLog;
         if (cap.length > 200) cap.splice(0, cap.length - 200);
+      }
+    }
+
+    function radioDiagEnabled() {
+      try {
+        return (
+          /(?:^|[?&])radioDiag=1(?:&|$)/.test(location.search) ||
+          localStorage.getItem("radioDiag") === "1"
+        );
+      } catch {
+        return false;
+      }
+    }
+
+    let radioDiagSamplerTimer = null;
+
+    function audioElSnapshot(el, side = null) {
+      if (!el) return null;
+      const resolvedSide =
+        side !== null ? side : el.id === "bgm-a" ? 0 : el.id === "bgm-b" ? 1 : -1;
+      const buf = [];
+      for (let i = 0; i < el.buffered.length; i++) {
+        buf.push({
+          s: +el.buffered.start(i).toFixed(2),
+          e: +el.buffered.end(i).toFixed(2)
+        });
+      }
+      const state = resolveBroadcastState();
+      let clockDiffSec = null;
+      if (state && resolvedSide >= 0 && slotMixIndex[resolvedSide] === state.mixIndex) {
+        clockDiffSec = +Math.abs(el.currentTime - state.positionSec).toFixed(3);
+      }
+      return {
+        side: resolvedSide,
+        activeSide: activeAudioSide,
+        slotMixIndex: resolvedSide >= 0 ? slotMixIndex[resolvedSide] : null,
+        broadcast: state
+          ? { mixIndex: state.mixIndex, positionSec: +state.positionSec.toFixed(3) }
+          : null,
+        clockDiffSec,
+        currentTime: +el.currentTime.toFixed(3),
+        readyState: el.readyState,
+        networkState: el.networkState,
+        paused: el.paused,
+        seeking: el.seeking,
+        playbackRate: el.playbackRate,
+        buffered: buf,
+        bufferedAheadSec:
+          buf.length > 0 ? +Math.max(0, buf[buf.length - 1].e - el.currentTime).toFixed(2) : null,
+        seekTarget: resolvedSide >= 0 ? slotSeekTarget[resolvedSide] : null,
+        srcTail: el.currentSrc?.split("/").pop() || "",
+        err: el.error?.code ?? null
+      };
+    }
+
+    function radioDiag(event, detail = {}) {
+      if (!radioDiagEnabled()) return;
+      const payload = { level: "diag", event, t: Date.now(), ...detail };
+      if (!window.__radioDiagLog) window.__radioDiagLog = [];
+      window.__radioDiagLog.push(payload);
+      if (window.__radioDiagLog.length > 3000) {
+        window.__radioDiagLog.splice(0, 600);
+      }
+      console.info(`[radio-diag] ${event}`, payload);
+    }
+
+    function startRadioDiagSampler() {
+      if (!radioDiagEnabled() || radioDiagSamplerTimer !== null) return;
+      let lastPeriodicMs = 0;
+      radioDiagSamplerTimer = setInterval(() => {
+        const now = Date.now();
+        if (!bgmA.paused && !bgmB.paused) {
+          radioDiag("dual_play_detected", {
+            a: audioElSnapshot(bgmA, 0),
+            b: audioElSnapshot(bgmB, 1)
+          });
+        }
+        if (now - lastPeriodicMs < 5000) return;
+        lastPeriodicMs = now;
+        const active = activeAudioEl();
+        radioDiag("periodic_sample", {
+          active: audioElSnapshot(active, activeAudioSide),
+          standby: audioElSnapshot(standbyAudioEl(), standbyAudioSide())
+        });
+      }, 1000);
+    }
+
+    function wireAudioDiagEvents(side) {
+      if (!radioDiagEnabled()) return;
+      const el = audioSideEl(side);
+      const mk =
+        (name) =>
+        () => {
+          radioDiag(`media_${name}`, { side, ...audioElSnapshot(el, side) });
+        };
+      for (const name of [
+        "waiting",
+        "stalled",
+        "playing",
+        "seeking",
+        "seeked",
+        "error",
+        "suspend",
+        "abort",
+        "emptied"
+      ]) {
+        el.addEventListener(name, mk(name));
       }
     }
 
@@ -832,31 +947,93 @@
       return decodeURIComponent(el.src).includes(token);
     }
 
+    function broadcastClockDelta(expected, actual, mixDuration) {
+      let delta = actual - expected;
+      if (delta > mixDuration / 2) delta -= mixDuration;
+      if (delta < -mixDuration / 2) delta += mixDuration;
+      return delta;
+    }
+
+    function shouldCorrectDrift(expected, actual, mixDuration, recoverMode) {
+      const delta = broadcastClockDelta(expected, actual, mixDuration);
+      const threshold = recoverMode
+        ? BROADCAST_DRIFT_RECOVER_THRESHOLD_SEC
+        : BROADCAST_DRIFT_THRESHOLD_SEC;
+      if (delta > 0.2) {
+        radioDiag("drift_skip_ahead", { expected, actual, delta, threshold });
+        return false;
+      }
+      const lagSec = -delta;
+      if (lagSec <= threshold) return false;
+      return true;
+    }
+
     function isBufferedForSeek(el, seekSec) {
       if (!Number.isFinite(seekSec) || seekSec < 0) return false;
-      if (seekSec <= 0.25 && el.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) return true;
-      const ranges = el.buffered;
-      for (let i = 0; i < ranges.length; i++) {
-        if (seekSec >= ranges.start(i) - 0.35 && seekSec <= ranges.end(i) + 0.5) return true;
+      if (seekSec <= 0.25) {
+        return el.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
       }
-      return el.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA;
+      if (el.readyState < HTMLMediaElement.HAVE_METADATA) return false;
+      const ranges = el.buffered;
+      const aheadNeed = BROADCAST_SEEK_BUFFER_AHEAD_SEC;
+      for (let i = 0; i < ranges.length; i++) {
+        const start = ranges.start(i);
+        const end = ranges.end(i);
+        if (seekSec >= start - 0.25 && seekSec <= end) {
+          return end - seekSec >= aheadNeed;
+        }
+      }
+      return false;
     }
 
     function isSlotPlayable(side, seekSec) {
       const el = audioSideEl(side);
       if (slotMixIndex[side] < 0) return false;
+      if (el.error) return false;
       if (el.readyState < HTMLMediaElement.HAVE_METADATA) return false;
-      return isBufferedForSeek(el, seekSec);
+      if (!Number.isFinite(el.duration) || el.duration <= 0) return false;
+      if (seekSec <= 0.25) {
+        return el.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+      }
+      if (isBufferedForSeek(el, seekSec)) return true;
+      if (el.seeking) return false;
+      return Math.abs(el.currentTime - seekSec) <= 0.4;
     }
 
-    function applySlotSeek(side, seekSec) {
+    function canAttemptSeek(el, seekSec, strict) {
+      if (!Number.isFinite(seekSec) || seekSec < 0) return false;
+      if (seekSec <= 0.25) {
+        return el.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+      }
+      if (el.readyState < HTMLMediaElement.HAVE_METADATA) return false;
+      if (isBufferedForSeek(el, seekSec)) return true;
+      if (strict) return false;
+      return Number.isFinite(el.duration) && seekSec < el.duration - 0.05;
+    }
+
+    function applySlotSeek(side, seekSec, strict = true) {
       const el = audioSideEl(side);
       if (el.seeking) return;
       if (el.readyState < HTMLMediaElement.HAVE_METADATA) return;
       if (el.error) return;
       if (Math.abs(el.currentTime - seekSec) <= 0.05) return;
+      if (seekSec > 0.25 && !canAttemptSeek(el, seekSec, strict)) {
+        radioDiag("seek_blocked_unbuffered", {
+          side,
+          seekSec,
+          strict,
+          snap: audioElSnapshot(el, side)
+        });
+        return;
+      }
+      if (strict && seekSec < el.currentTime - 0.75) {
+        radioDiag("seek_blocked_backward", { side, seekSec, currentTime: el.currentTime });
+        return;
+      }
+      const prev = el.currentTime;
       try {
         el.currentTime = seekSec;
+        radioDiag("seek_apply", { side, from: prev, to: seekSec });
       } catch {
         /* ignore invalid seek while loading */
       }
@@ -870,7 +1047,7 @@
       const already = slotMixIndex[side] === mixIndex && slotHasMixSrc(el, mixIndex);
       if (already) {
         if (el.readyState >= HTMLMediaElement.HAVE_METADATA) {
-          applySlotSeek(side, positionSec);
+          tryApplySlotSeekWhenReady(side);
         }
         return;
       }
@@ -888,12 +1065,24 @@
       el.load();
     }
 
-    function tryApplySlotSeekWhenReady(side) {
+    function seekStrictnessForSlot(side) {
       const el = audioSideEl(side);
       const seek = slotSeekTarget[side];
-      if (el.readyState < HTMLMediaElement.HAVE_METADATA) return;
-      if (seek > 0.25 && !isBufferedForSeek(el, seek)) return;
-      applySlotSeek(side, seek);
+      if (!Number.isFinite(seek)) return true;
+      return Math.abs(el.currentTime - seek) <= BROADCAST_DRIFT_THRESHOLD_SEC;
+    }
+
+    function tryApplySlotSeekWhenReady(side, strict = null) {
+      const el = audioSideEl(side);
+      const seek = slotSeekTarget[side];
+      if (!Number.isFinite(seek)) return false;
+      if (el.readyState < HTMLMediaElement.HAVE_METADATA) return false;
+      if (el.seeking) return false;
+      if (Math.abs(el.currentTime - seek) <= 0.05) return true;
+      const useStrict = strict === null ? seekStrictnessForSlot(side) : strict;
+      if (!canAttemptSeek(el, seek, useStrict)) return false;
+      applySlotSeek(side, seek, useStrict);
+      return true;
     }
 
     function onSlotMediaReady(side) {
@@ -925,6 +1114,9 @@
       el.addEventListener("loadedmetadata", bump);
       el.addEventListener("canplay", bump);
       el.addEventListener("progress", () => {
+        const now = Date.now();
+        if (now - slotSeekProgressLastMs[side] < BROADCAST_SEEK_PROGRESS_DEBOUNCE_MS) return;
+        slotSeekProgressLastMs[side] = now;
         tryApplySlotSeekWhenReady(side);
       });
       el.addEventListener("error", () => {
@@ -971,7 +1163,8 @@
       if (slotMixIndex[standby] !== nextIdx) {
         prepareAudioSide(standby, nextIdx, 0);
       } else {
-        applySlotSeek(standby, 0);
+        slotSeekTarget[standby] = 0;
+        tryApplySlotSeekWhenReady(standby);
       }
     }
 
@@ -997,7 +1190,19 @@
       const incoming = audioSideEl(handoffSide);
       const outgoing = activeAudioEl();
       incoming.muted = audioMuted;
-      applySlotSeek(handoffSide, needPos);
+      slotSeekTarget[handoffSide] = needPos;
+      tryApplySlotSeekWhenReady(handoffSide);
+
+      if (needPos > 0.25 && !isSlotPlayable(handoffSide, needPos)) {
+        radioLog("warn", "handoff_deferred_not_buffered", {
+          mode,
+          mixIndex: needIdx,
+          positionSec: needPos,
+          ...slotReadinessDetail(handoffSide, needPos)
+        });
+        scheduleStandbyHandoffRecovery(handoffSide, needIdx, needPos, mode.includes("boundary"));
+        return false;
+      }
 
       const playPromise = incoming.play();
       if (playPromise) {
@@ -1022,6 +1227,7 @@
     function scheduleStandbyHandoffRecovery(handoffSide, needIdx, needPos, atBoundary) {
       if (handoffRecoveryTimer !== null) return;
       handoffRecoveryAtBoundary = atBoundary;
+      handoffRecoveryExtendCount = 0;
       const waitMs = atBoundary ? BROADCAST_HANDOFF_BOUNDARY_WAIT_MS : BROADCAST_HANDOFF_RECOVERY_WAIT_MS;
       handoffRecoveryDeadlineMs = Date.now() + waitMs;
       radioLog("warn", "handoff_standby_not_ready", {
@@ -1045,16 +1251,30 @@
           return;
         }
         prepareAudioSide(handoffSide, needIdx, pos);
-        applySlotSeek(handoffSide, pos);
+        slotSeekTarget[handoffSide] = pos;
+        tryApplySlotSeekWhenReady(handoffSide);
 
         if (Date.now() >= handoffRecoveryDeadlineMs) {
+          if (
+            handoffRecoveryAtBoundary &&
+            handoffRecoveryExtendCount < 3 &&
+            isSlotPlayable(handoffSide, pos) === false
+          ) {
+            handoffRecoveryExtendCount += 1;
+            handoffRecoveryDeadlineMs = Date.now() + waitMs;
+            radioLog("warn", "handoff_boundary_extend_wait", {
+              extend: handoffRecoveryExtendCount,
+              ...slotReadinessDetail(handoffSide, pos),
+              needMixIndex: needIdx
+            });
+            return;
+          }
           clearHandoffRecovery();
-          radioLog("error", "handoff_forced_underbuffered", {
+          radioLog("error", "handoff_recovery_timeout", {
             ...slotReadinessDetail(handoffSide, pos),
             needMixIndex: needIdx,
             atBoundary: handoffRecoveryAtBoundary
           });
-          completeGaplessHandoff(handoffSide, needIdx, pos, "forced_underbuffered");
         }
       }, BROADCAST_HANDOFF_POLL_MS);
     }
@@ -1102,7 +1322,8 @@
       if (slotMixIndex[handoffSide] !== needIdx) {
         prepareAudioSide(handoffSide, needIdx, needPos);
       } else {
-        applySlotSeek(handoffSide, needPos);
+        slotSeekTarget[handoffSide] = needPos;
+        tryApplySlotSeekWhenReady(handoffSide);
       }
 
       if (!isSlotPlayable(handoffSide, needPos)) {
@@ -1115,18 +1336,28 @@
     }
 
     function recoverBroadcastFromClock(forceHandoff = false) {
-      const state = resolveBroadcastState();
-      if (!state) return;
-      clearBroadcastSchedulers();
-
-      const activeMix = slotMixIndex[activeAudioSide];
-      if (activeMix !== state.mixIndex || forceHandoff) {
-        performMixHandoffIfNeeded(false);
-      } else {
-        syncAudioToBroadcast(true);
-        scheduleBoundaryHandoff();
+      const now = Date.now();
+      if (broadcastRecoveryPending || now - lastBroadcastRecoveryMs < BROADCAST_RECOVERY_DEBOUNCE_MS) {
+        return;
       }
-      syncNowPlayingFromBroadcast();
+      broadcastRecoveryPending = true;
+      lastBroadcastRecoveryMs = now;
+      try {
+        const state = resolveBroadcastState();
+        if (!state) return;
+        clearBroadcastSchedulers();
+
+        const activeMix = slotMixIndex[activeAudioSide];
+        if (activeMix !== state.mixIndex || forceHandoff) {
+          performMixHandoffIfNeeded(false);
+        } else {
+          syncAudioToBroadcast(true);
+          scheduleBoundaryHandoff();
+        }
+        syncNowPlayingFromBroadcast();
+      } finally {
+        broadcastRecoveryPending = false;
+      }
     }
 
     function mixPositionSeconds() {
@@ -1158,14 +1389,29 @@
       const mixDuration = broadcastMixes[state.mixIndex].durationSec;
       const expected = state.positionSec;
       const actual = active.currentTime;
-      let diff = Math.abs(actual - expected);
-      if (diff > mixDuration / 2) diff = mixDuration - diff;
+      const delta = broadcastClockDelta(expected, actual, mixDuration);
+      radioDiag("drift_sync_check", {
+        force,
+        expected,
+        actual,
+        delta,
+        recover: force
+      });
 
-      if (force || diff > BROADCAST_DRIFT_THRESHOLD_SEC) {
-        if (active.seeking) return true;
-        slotSeekTarget[activeAudioSide] = expected;
-        tryApplySlotSeekWhenReady(activeAudioSide);
+      if (!shouldCorrectDrift(expected, actual, mixDuration, force)) {
+        return true;
+      }
+      if (active.seeking) return true;
+      slotSeekTarget[activeAudioSide] = expected;
+      if (tryApplySlotSeekWhenReady(activeAudioSide, !force)) {
         lastDriftCorrectMs = Date.now();
+        radioLog("info", "drift_correct", {
+          expected,
+          actual,
+          delta,
+          recover: force,
+          strictSeek: force ? false : true
+        });
       }
       return true;
     }
@@ -1187,13 +1433,16 @@
       const mixDuration = broadcastMixes[state.mixIndex].durationSec;
       const expected = state.positionSec;
       const actual = active.currentTime;
-      let diff = Math.abs(actual - expected);
-      if (diff > mixDuration / 2) diff = mixDuration - diff;
+      const delta = broadcastClockDelta(expected, actual, mixDuration);
+      radioDiag("drift_measure", { expected, actual, delta });
 
-      if (diff > BROADCAST_DRIFT_THRESHOLD_SEC) {
-        slotSeekTarget[activeAudioSide] = expected;
-        tryApplySlotSeekWhenReady(activeAudioSide);
+      if (!shouldCorrectDrift(expected, actual, mixDuration, false)) {
+        return;
+      }
+      slotSeekTarget[activeAudioSide] = expected;
+      if (tryApplySlotSeekWhenReady(activeAudioSide, true)) {
         lastDriftCorrectMs = now;
+        radioLog("info", "drift_correct", { expected, actual, delta, recover: false });
       }
     }
 
@@ -1577,7 +1826,7 @@
       const el = audioSideEl(side);
       return new Promise((resolve, reject) => {
         const tick = () => {
-          tryApplySlotSeekWhenReady(side);
+          tryApplySlotSeekWhenReady(side, false);
           if (isSlotPlayable(side, seek)) {
             cleanup();
             resolve();
@@ -1895,6 +2144,9 @@
 
       wireAudioSlot(0);
       wireAudioSlot(1);
+      wireAudioDiagEvents(0);
+      wireAudioDiagEvents(1);
+      if (radioDiagEnabled()) startRadioDiagSampler();
       bgmA.loop = false;
       bgmB.loop = false;
       syncBroadcastMuteState();
@@ -1925,11 +2177,11 @@
 
       document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "visible") {
-          recoverBroadcastFromClock(true);
+          recoverBroadcastFromClock(false);
         }
       });
       window.addEventListener("pageshow", (ev) => {
-        if (ev.persisted) recoverBroadcastFromClock(true);
+        if (ev.persisted) recoverBroadcastFromClock(false);
       });
       window.addEventListener("focus", () => recoverBroadcastFromClock(false));
 
@@ -3196,9 +3448,11 @@
 
       if (unmuting) {
         prepareActiveSlotForBroadcast();
-        activeAudioEl().play().catch(() => {});
         syncAudioToBroadcast(true);
-        if (activeAudioEl().paused) {
+        try {
+          await waitUntilSlotPlayable(activeAudioSide);
+          await activeAudioEl().play();
+        } catch {
           await tryStartMutedPlayback();
         }
         initRadioAudioAnalyser();
