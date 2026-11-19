@@ -1112,7 +1112,10 @@
         });
         return;
       }
-      if (strict && seekSec < el.currentTime - 0.75) {
+      if (
+        seekSec < el.currentTime - 0.35 &&
+        (strict || (side === activeAudioSide && playbackUnlocked && !el.paused))
+      ) {
         radioDiag("seek_blocked_backward", { side, seekSec, currentTime: el.currentTime });
         return;
       }
@@ -1165,6 +1168,15 @@
       if (el.readyState < HTMLMediaElement.HAVE_METADATA) return false;
       if (el.seeking) return false;
       if (Math.abs(el.currentTime - seek) <= 0.05) return true;
+      if (
+        side === activeAudioSide &&
+        playbackUnlocked &&
+        !el.paused &&
+        seek < el.currentTime - 0.35
+      ) {
+        slotSeekTarget[side] = el.currentTime;
+        return true;
+      }
       const useStrict = strict === null ? seekStrictnessForSlot(side) : strict;
       if (!canAttemptSeek(el, seek, useStrict)) return false;
       applySlotSeek(side, seek, useStrict);
@@ -1200,6 +1212,8 @@
       el.addEventListener("loadedmetadata", bump);
       el.addEventListener("canplay", bump);
       el.addEventListener("progress", () => {
+        const elp = audioSideEl(side);
+        if (side === activeAudioSide && playbackUnlocked && !elp.paused) return;
         const now = Date.now();
         if (now - slotSeekProgressLastMs[side] < BROADCAST_SEEK_PROGRESS_DEBOUNCE_MS) return;
         slotSeekProgressLastMs[side] = now;
@@ -1434,13 +1448,20 @@
         clearBroadcastSchedulers();
 
         const activeMix = slotMixIndex[activeAudioSide];
+        const active = activeAudioEl();
         if (activeMix !== state.mixIndex || forceHandoff) {
           performMixHandoffIfNeeded(false);
         } else {
-          syncAudioToBroadcast(true);
+          if (active.paused || !playbackUnlocked) {
+            syncAudioToBroadcast(true);
+          }
           scheduleBoundaryHandoff();
         }
-        syncNowPlayingFromBroadcast();
+        if (playbackUnlocked && !activeAudioEl().paused) {
+          syncNowPlayingFromAudio();
+        } else {
+          syncNowPlayingFromBroadcast();
+        }
       } finally {
         broadcastRecoveryPending = false;
       }
@@ -1950,6 +1971,10 @@
     function onAudioPlaybackSignal() {
       if (radioAnalyser && radioStreamTaps.length === 0) {
         attachRadioAnalyserTaps();
+      }
+      const active = activeAudioEl();
+      if (!active.paused && playbackUnlocked && slotMixIndex[activeAudioSide] >= 0) {
+        slotSeekTarget[activeAudioSide] = active.currentTime;
       }
       syncNowPlayingFromAudio();
     }
