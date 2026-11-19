@@ -2692,17 +2692,31 @@
       }
     }
 
-    muteButton.addEventListener("click", async () => {
+    muteButton.addEventListener("click", () => {
       audioMuted = !audioMuted;
-      initRadioAudioAnalyser();
-      syncMuteUi();
-      playbackUnlocked = true;
-      syncBroadcastMuteState();
-      await resumeRadioAudioContext();
-      attachRadioAnalyserTaps();
-      syncAudioToBroadcast(true);
-      if (activeAudioEl().paused) {
-        await tryStartMutedPlayback();
+
+      if (!audioMuted) {
+        playbackUnlocked = true;
+        syncBroadcastMuteState();
+        syncAudioToBroadcast(true);
+        const active = activeAudioEl();
+        const playPromise = active.play();
+        initRadioAudioAnalyser();
+        syncMuteUi();
+        void (async () => {
+          try {
+            if (playPromise) await playPromise;
+            await resumeRadioAudioContext();
+            attachRadioAnalyserTaps();
+            syncNowPlayingFromAudio();
+          } catch (err) {
+            radioLog("warn", "unmute_play_rejected", { message: String(err) });
+            await tryStartMutedPlayback();
+          }
+        })();
+      } else {
+        syncMuteUi();
+        syncBroadcastMuteState();
       }
     });
 
