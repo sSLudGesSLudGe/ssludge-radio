@@ -857,6 +857,24 @@
     let titleGlitchBurstStart = 0;
     let titleGlitchBurstDuration = 0;
 
+    const visualDirty = {
+      title: true,
+      mute: true,
+      sludge: true,
+      dock: true,
+      datetime: true,
+    };
+    function visualMarkAllDirty() {
+      visualDirty.title = true;
+      visualDirty.mute = true;
+      visualDirty.sludge = true;
+      visualDirty.dock = true;
+      visualDirty.datetime = true;
+    }
+    function visualMarkTitleDirty() {
+      visualDirty.title = true;
+    }
+
     function slideBlankGapMs() {
       return SLIDE_GAP_MIN_MS + Math.random() * (SLIDE_GAP_MAX_MS - SLIDE_GAP_MIN_MS);
     }
@@ -956,9 +974,16 @@
       return screenGlitchIntensity < 0.12;
     }
 
-    function screenGlitchLoop() {
-      applyScreenGlitchVisual(performance.now());
-      requestAnimationFrame(screenGlitchLoop);
+    function tickScreenGlitchVisual(now) {
+      applyScreenGlitchVisual(now);
+    }
+
+    function visualGlitchIdle() {
+      return (
+        screenGlitchIntensity <= 0 &&
+        !titleGlitchBurstActive &&
+        screenGlitchSoft()
+      );
     }
 
     function titleGlitchPhase(now) {
@@ -1868,6 +1893,7 @@
         syncWrappedTitleCanvasSize();
       }
       layoutTitleLinks(track);
+      visualMarkTitleDirty();
     }
 
     function syncNowPlayingFromAudio() {
@@ -2223,11 +2249,16 @@
       }
     }
 
-    function scannerFrame() {
+    function tickScannerVisual() {
       pushScannerColumn();
       paintScannerLayers();
-      renderGlitch(scannerCtx, scannerLayers, scannerCanvas.width, scannerCanvas.height, screenGlitchSoft());
-      requestAnimationFrame(scannerFrame);
+      renderGlitch(
+        scannerCtx,
+        scannerLayers,
+        scannerCanvas.width,
+        scannerCanvas.height,
+        screenGlitchSoft()
+      );
     }
 
     function initRadioAudio() {
@@ -2269,7 +2300,10 @@
 
       document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "visible") {
+          resumeVisualScheduler();
           recoverBroadcastFromClock(false);
+        } else {
+          pauseVisualScheduler();
         }
       });
       window.addEventListener("pageshow", (ev) => {
@@ -2844,10 +2878,15 @@
       }
     }
 
-    function dockBarFrame() {
+    function tickDockBarVisual() {
       paintDockBarLayers();
-      renderGlitch(dockBarCtx, dockBarLayers, dockBarCanvas.width, dockBarCanvas.height, screenGlitchSoft());
-      requestAnimationFrame(dockBarFrame);
+      renderGlitch(
+        dockBarCtx,
+        dockBarLayers,
+        dockBarCanvas.width,
+        dockBarCanvas.height,
+        screenGlitchSoft()
+      );
     }
 
     const bgGlitchColors = {
@@ -2875,6 +2914,7 @@
       const sig = bgLayerCacheSignature();
       if (sig === bgLayerCacheKey && bgCachedLayers.white) return;
       bgLayerCacheKey = sig;
+      visualPerfStats.bgCacheRebuilds++;
       const w = bgCanvas.width;
       const h = bgCanvas.height;
       if (!w || !h) return;
@@ -2965,7 +3005,7 @@
 
     let bgCacheGlitchSoft = null;
 
-    function bgFrame() {
+    function tickBgVisual() {
       const soft = screenGlitchSoft();
       if (bgCacheGlitchSoft !== null && soft !== bgCacheGlitchSoft) {
         invalidateBgLayerCache();
@@ -2976,7 +3016,6 @@
       bgCtx.globalAlpha = onBurst ? 0.38 : 0.22;
       renderGlitch(bgCtx, bgCachedLayers, bgCanvas.width, bgCanvas.height, true);
       bgCtx.globalAlpha = 1;
-      requestAnimationFrame(bgFrame);
     }
 
     function muteContentWidth(label, muted) {
@@ -3014,9 +3053,29 @@
       }
     }
 
+    const visualPerfStats = {
+      renderGlitchFast: 0,
+      renderGlitchFull: 0,
+      repaintBg: 0,
+      repaintTitle: 0,
+      repaintScanner: 0,
+      repaintDock: 0,
+      repaintMute: 0,
+      repaintDatetime: 0,
+      repaintSludge: 0,
+      bgCacheRebuilds: 0,
+    };
+
     function renderGlitch(outCtx, layerSet, w, h, soft = false) {
       outCtx.clearRect(0, 0, w, h);
       outCtx.imageSmoothingEnabled = false;
+
+      if (soft && visualGlitchIdle() && layerSet?.white) {
+        outCtx.drawImage(layerSet.white, 0, 0, w, h);
+        visualPerfStats.renderGlitchFast++;
+        return;
+      }
+      visualPerfStats.renderGlitchFull++;
 
       const band = Math.max(2, Math.round(window.devicePixelRatio || 1));
       const tearAt = Math.random() * h;
@@ -3452,8 +3511,8 @@
       }
     }
 
-    function frame() {
-      const phase = titleGlitchPhase(performance.now());
+    function tickTitleVisual(now) {
+      const phase = titleGlitchPhase(now);
       paintLayers(phase);
       if (phase === "hidden") {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -3462,7 +3521,6 @@
       } else {
         renderGlitch(ctx, layers, canvas.width, canvas.height, true);
       }
-      requestAnimationFrame(frame);
     }
 
     function paintTimeLayers() {
@@ -3509,19 +3567,17 @@
     //   }
     // }
 
-    function muteFrame() {
+    function tickMuteVisual() {
       paintMuteLayers();
       renderGlitch(muteCtx, muteLayers, muteCanvas.width, muteCanvas.height, screenGlitchSoft());
-      requestAnimationFrame(muteFrame);
     }
 
-    function datetimeFrame() {
+    function tickDatetimeVisual() {
       syncDatetimeClock();
       paintTimeLayers();
       paintDateLayers();
       renderGlitch(timeCtx, timeLayers, timeCanvas.width, timeCanvas.height, screenGlitchSoft());
       renderGlitch(dateCtx, dateLayers, dateCanvas.width, dateCanvas.height, screenGlitchSoft());
-      requestAnimationFrame(datetimeFrame);
     }
 
     function paintSludgeLayers() {
@@ -3559,11 +3615,152 @@
     //   requestAnimationFrame(brandFrame);
     // }
 
-    function sludgeFrame() {
+    function tickSludgeVisual() {
       paintSludgeLayers();
       renderGlitch(sludgeCtx, sludgeLayers, sludgeCanvas.width, sludgeCanvas.height, screenGlitchSoft());
-      requestAnimationFrame(sludgeFrame);
     }
+
+    const VIS_BG_MS = 1000 / 12;
+    const VIS_HUD_MS = 1000 / 18;
+    const VIS_TITLE_IDLE_MS = 1000 / 15;
+    const VIS_TITLE_BURST_MS = 1000 / 30;
+    const VIS_DATETIME_MS = 1000;
+    const VIS_SCREEN_BURST_MS = 1000 / 30;
+    const VIS_SCREEN_IDLE_MS = 1000 / 12;
+
+    let visualSchedulerRunning = false;
+    let visualSchedulerRafId = null;
+    let visualSchedulerLastTs = 0;
+    const visualSchedulerAcc = {
+      screen: 0,
+      bg: 0,
+      title: 0,
+      hud: 0,
+      datetime: 0,
+    };
+
+    function visualHudAnimates() {
+      return !visualGlitchIdle();
+    }
+
+    function visualSchedulerTick(now) {
+      if (!visualSchedulerRunning || document.hidden) {
+        visualSchedulerRafId = null;
+        return;
+      }
+      const dt = visualSchedulerLastTs ? Math.min(120, now - visualSchedulerLastTs) : 16.7;
+      visualSchedulerLastTs = now;
+
+      visualSchedulerAcc.screen += dt;
+      const screenStep =
+        screenGlitchIntensity > 0 ? VIS_SCREEN_BURST_MS : VIS_SCREEN_IDLE_MS;
+      if (visualSchedulerAcc.screen >= screenStep) {
+        visualSchedulerAcc.screen %= screenStep;
+        tickScreenGlitchVisual(now);
+      }
+
+      visualSchedulerAcc.bg += dt;
+      if (visualSchedulerAcc.bg >= VIS_BG_MS) {
+        visualSchedulerAcc.bg %= VIS_BG_MS;
+        tickBgVisual();
+        visualPerfStats.repaintBg++;
+      }
+
+      visualSchedulerAcc.title += dt;
+      const titleStep = titleGlitchBurstActive ? VIS_TITLE_BURST_MS : VIS_TITLE_IDLE_MS;
+      if (visualSchedulerAcc.title >= titleStep || visualDirty.title) {
+        if (visualSchedulerAcc.title >= titleStep) {
+          visualSchedulerAcc.title %= titleStep;
+        }
+        tickTitleVisual(now);
+        visualPerfStats.repaintTitle++;
+        visualDirty.title = false;
+      }
+
+      visualSchedulerAcc.hud += dt;
+      if (visualSchedulerAcc.hud >= VIS_HUD_MS) {
+        visualSchedulerAcc.hud %= VIS_HUD_MS;
+        tickScannerVisual();
+        visualPerfStats.repaintScanner++;
+        if (visualHudAnimates() || visualDirty.dock) {
+          tickDockBarVisual();
+          visualPerfStats.repaintDock++;
+          visualDirty.dock = false;
+        }
+        if (visualHudAnimates() || visualDirty.mute) {
+          tickMuteVisual();
+          visualPerfStats.repaintMute++;
+          visualDirty.mute = false;
+        }
+        if (visualHudAnimates() || visualDirty.sludge) {
+          tickSludgeVisual();
+          visualPerfStats.repaintSludge++;
+          visualDirty.sludge = false;
+        }
+      }
+
+      visualSchedulerAcc.datetime += dt;
+      if (visualSchedulerAcc.datetime >= VIS_DATETIME_MS || visualDirty.datetime) {
+        visualSchedulerAcc.datetime = 0;
+        tickDatetimeVisual();
+        visualPerfStats.repaintDatetime++;
+        visualDirty.datetime = false;
+      }
+
+      visualSchedulerRafId = requestAnimationFrame(visualSchedulerTick);
+    }
+
+    function startVisualScheduler() {
+      if (visualSchedulerRunning) return;
+      visualSchedulerRunning = true;
+      visualSchedulerLastTs = 0;
+      visualMarkAllDirty();
+      const bootNow = performance.now();
+      tickScreenGlitchVisual(bootNow);
+      tickBgVisual();
+      visualPerfStats.repaintBg++;
+      tickTitleVisual(bootNow);
+      visualPerfStats.repaintTitle++;
+      tickDatetimeVisual();
+      visualPerfStats.repaintDatetime++;
+      tickMuteVisual();
+      visualPerfStats.repaintMute++;
+      tickSludgeVisual();
+      visualPerfStats.repaintSludge++;
+      tickDockBarVisual();
+      visualPerfStats.repaintDock++;
+      tickScannerVisual();
+      visualPerfStats.repaintScanner++;
+      visualDirty.title = false;
+      visualDirty.mute = false;
+      visualDirty.sludge = false;
+      visualDirty.dock = false;
+      visualDirty.datetime = false;
+      if (visualSchedulerRafId === null) {
+        visualSchedulerRafId = requestAnimationFrame(visualSchedulerTick);
+      }
+    }
+
+    function pauseVisualScheduler() {
+      visualSchedulerRunning = false;
+      if (visualSchedulerRafId !== null) {
+        cancelAnimationFrame(visualSchedulerRafId);
+        visualSchedulerRafId = null;
+      }
+      visualSchedulerLastTs = 0;
+    }
+
+    function resumeVisualScheduler() {
+      if (document.hidden) return;
+      visualMarkAllDirty();
+      startVisualScheduler();
+    }
+
+    window.__visualSchedulerStats = () => ({
+      running: visualSchedulerRunning,
+      rafRoots: visualSchedulerRunning && !document.hidden ? 1 : 0,
+      perf: { ...visualPerfStats },
+    });
 
     const muteButton = document.getElementById("mute");
     const muteLabel = document.getElementById("mute-label");
@@ -3573,6 +3770,8 @@
       muteLabel.textContent = muteLabelText;
       muteButton.setAttribute("aria-pressed", String(!audioMuted));
       muteButton.setAttribute("aria-label", audioMuted ? "Unmute audio" : "Mute audio");
+      visualDirty.mute = true;
+      visualDirty.dock = true;
       syncBroadcastMuteState();
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       resizeMuteCanvas(dpr);
@@ -3616,6 +3815,7 @@
       resizeScannerCanvas(dpr);
       resizeDockBarCanvas(dpr);
       syncTitleVerticalPosition();
+      visualMarkAllDirty();
       if (nowPlayingTrackIndex >= 0 && nowPlayingMixIndex >= 0) {
         layoutTitleLinks(broadcastMixes[nowPlayingMixIndex].tracks[nowPlayingTrackIndex]);
       }
@@ -3630,15 +3830,9 @@
       datetimeLastTick = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
       resize();
       resizeBgCanvas();
+      visualMarkAllDirty();
       initRadioAudio();
-      requestAnimationFrame(screenGlitchLoop);
-      requestAnimationFrame(bgFrame);
-      requestAnimationFrame(frame);
-      requestAnimationFrame(dockBarFrame);
-      requestAnimationFrame(muteFrame);
-      requestAnimationFrame(datetimeFrame);
-      requestAnimationFrame(sludgeFrame);
-      requestAnimationFrame(scannerFrame);
+      startVisualScheduler();
     }
 
     startTitle();
