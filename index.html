@@ -2965,7 +2965,7 @@
       const stepX = Math.max(1, Math.round(3 * dpr));
       const stepY = Math.max(1, Math.round(4 * dpr));
 
-      bctx.strokeStyle = "rgba(210, 228, 238, 0.022)";
+      bctx.strokeStyle = "rgba(210, 228, 238, 0.007)";
       bctx.lineWidth = 1;
       for (let x = 0; x <= w; x += stepX) {
         bctx.beginPath();
@@ -2973,7 +2973,7 @@
         bctx.lineTo(x + 0.5, h);
         bctx.stroke();
       }
-      bctx.strokeStyle = "rgba(200, 218, 228, 0.016)";
+      bctx.strokeStyle = "rgba(200, 218, 228, 0.005)";
       for (let y = 0; y <= h; y += stepY) {
         bctx.beginPath();
         bctx.moveTo(0, y + 0.5);
