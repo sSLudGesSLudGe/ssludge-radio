@@ -2857,7 +2857,46 @@
     };
     const bgCanvas = document.getElementById("bg-tv");
     const bgCtx = bgCanvas.getContext("2d");
-    const bgLayers = makeLayerSetFrom(bgGlitchColors);
+    const bgCachedLayers = { white: null, red: null, cyan: null };
+    let bgLayerCacheKey = "";
+
+    function invalidateBgLayerCache() {
+      bgLayerCacheKey = "";
+    }
+
+    function bgLayerCacheSignature() {
+      const w = bgCanvas.width;
+      const h = bgCanvas.height;
+      if (!w || !h) return "";
+      return `${w}x${h}:${screenGlitchSoft() ? "soft" : "hard"}`;
+    }
+
+    function ensureBgLayerCache() {
+      const sig = bgLayerCacheSignature();
+      if (sig === bgLayerCacheKey && bgCachedLayers.white) return;
+      bgLayerCacheKey = sig;
+      const w = bgCanvas.width;
+      const h = bgCanvas.height;
+      if (!w || !h) return;
+
+      for (const [name, color] of Object.entries(bgGlitchColors)) {
+        if (!bgCachedLayers[name]) {
+          bgCachedLayers[name] = document.createElement("canvas");
+        }
+        const layer = bgCachedLayers[name];
+        layer.width = w;
+        layer.height = h;
+        const bctx = layer.getContext("2d");
+        bctx.clearRect(0, 0, w, h);
+        paintBgScene(bctx, w, h);
+        if (name !== "white") {
+          bctx.globalCompositeOperation = "source-atop";
+          bctx.fillStyle = color;
+          bctx.fillRect(0, 0, w, h);
+          bctx.globalCompositeOperation = "source-over";
+        }
+      }
+    }
 
     function resizeBgCanvas() {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -2869,10 +2908,7 @@
       bgCanvas.height = h;
       bgCanvas.style.width = `${cssW}px`;
       bgCanvas.style.height = `${cssH}px`;
-      for (const layer of Object.values(bgLayers)) {
-        layer.width = w;
-        layer.height = h;
-      }
+      invalidateBgLayerCache();
     }
 
     function paintBgScene(bctx, w, h) {
@@ -2927,27 +2963,18 @@
       }
     }
 
-    function paintBgLayers() {
-      const w = bgCanvas.width;
-      const h = bgCanvas.height;
-      for (const [name, layer] of Object.entries(bgLayers)) {
-        const bctx = layer.getContext("2d");
-        bctx.clearRect(0, 0, w, h);
-        paintBgScene(bctx, w, h);
-        if (name !== "white") {
-          bctx.globalCompositeOperation = "source-atop";
-          bctx.fillStyle = bgGlitchColors[name];
-          bctx.fillRect(0, 0, w, h);
-          bctx.globalCompositeOperation = "source-over";
-        }
-      }
-    }
+    let bgCacheGlitchSoft = null;
 
     function bgFrame() {
-      paintBgLayers();
+      const soft = screenGlitchSoft();
+      if (bgCacheGlitchSoft !== null && soft !== bgCacheGlitchSoft) {
+        invalidateBgLayerCache();
+      }
+      bgCacheGlitchSoft = soft;
+      ensureBgLayerCache();
       const onBurst = screenGlitchIntensity > 0;
       bgCtx.globalAlpha = onBurst ? 0.38 : 0.22;
-      renderGlitch(bgCtx, bgLayers, bgCanvas.width, bgCanvas.height, true);
+      renderGlitch(bgCtx, bgCachedLayers, bgCanvas.width, bgCanvas.height, true);
       bgCtx.globalAlpha = 1;
       requestAnimationFrame(bgFrame);
     }
