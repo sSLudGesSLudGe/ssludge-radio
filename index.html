@@ -117,6 +117,12 @@
     .title-wrap canvas {
       display: block;
       pointer-events: none;
+      filter: blur(0.45px);
+    }
+
+    .vcr-dock-inner canvas,
+    #scanner-tv {
+      filter: blur(0.45px);
     }
 
     .title-links {
@@ -1722,6 +1728,7 @@
       bctx.fillStyle = fillStyle;
       bctx.textAlign = "left";
       bctx.textBaseline = "alphabetic";
+      applyVcrTextSoftness(bctx);
 
       let x = textXDev;
       track.artists.forEach((artist, index) => {
@@ -1734,6 +1741,7 @@
         bctx.fillText(label, x, textY);
         x += titleSegmentWidth(bctx, label);
       });
+      clearVcrTextSoftness(bctx);
     }
 
     function drawTitleInkSegments(bctx, track, songUpper, textXDev, textY, fillStyle) {
@@ -1744,9 +1752,11 @@
         x += titleSegmentWidth(bctx, artist.name.toUpperCase());
       });
       const gap = "   ";
+      applyVcrTextSoftness(bctx);
       bctx.fillText(gap, x, textY);
       x += titleSegmentWidth(bctx, gap);
       bctx.fillText(songUpper, x, textY);
+      clearVcrTextSoftness(bctx);
     }
 
     function titleLinkLayout(line) {
@@ -2519,7 +2529,9 @@
         drawHudHighlight(bctx, barX, barY, barW, barH, panel);
       }
       bctx.fillStyle = fillStyle;
+      applyVcrTextSoftness(bctx);
       bctx.fillText(text, textX, baselineY);
+      clearVcrTextSoftness(bctx);
     }
 
     function muteIconCells(muted) {
@@ -2669,7 +2681,9 @@
 
       bctx.textAlign = "left";
       bctx.textBaseline = "alphabetic";
+      applyVcrTextSoftness(bctx);
       bctx.fillText(label, textX, text.baselineForMid(rowY));
+      clearVcrTextSoftness(bctx);
     }
 
     function iconLabelBoxWidth(iconCells, label) {
@@ -2803,7 +2817,9 @@
       bctx.textAlign = "left";
       bctx.textBaseline = "alphabetic";
       bctx.fillStyle = fillStyle;
+      applyVcrTextSoftness(bctx);
       bctx.fillText(text, textX, line.baselineForMid(rowY));
+      clearVcrTextSoftness(bctx);
     }
 
     function drawBrandDotMark(bctx, w, h, fillStyle, showDot, scale, box) {
@@ -2966,7 +2982,7 @@
       const w = bgCanvas.width;
       const h = bgCanvas.height;
       if (!w || !h) return "";
-      return `${w}x${h}`;
+      return `${w}x${h}:v2`;
     }
 
     function ensureBgLayerCache() {
@@ -3021,18 +3037,10 @@
       bctx.fillRect(0, 0, w, h);
 
       const dpr = w / Math.max(1, window.innerWidth);
-      const stepX = Math.max(1, Math.round(3 * dpr));
-      const stepY = Math.max(1, Math.round(4 * dpr));
+      const stepY = Math.max(2, Math.round(5 * dpr));
 
-      bctx.strokeStyle = "rgba(210, 228, 238, 0.007)";
+      bctx.strokeStyle = "rgba(200, 218, 228, 0.003)";
       bctx.lineWidth = 1;
-      for (let x = 0; x <= w; x += stepX) {
-        bctx.beginPath();
-        bctx.moveTo(x + 0.5, 0);
-        bctx.lineTo(x + 0.5, h);
-        bctx.stroke();
-      }
-      bctx.strokeStyle = "rgba(200, 218, 228, 0.005)";
       for (let y = 0; y <= h; y += stepY) {
         bctx.beginPath();
         bctx.moveTo(0, y + 0.5);
@@ -3040,7 +3048,7 @@
         bctx.stroke();
       }
 
-      const scanStep = Math.max(1, Math.round(3 * dpr));
+      const scanStep = Math.max(2, Math.round(4 * dpr));
       bctx.fillStyle = "rgba(0, 0, 0, 0.12)";
       for (let y = 0; y < h; y += scanStep) {
         bctx.fillRect(0, y, w, 1);
@@ -3109,13 +3117,35 @@
       ctx.restore();
     }
 
+    function renderBgIdleComposite(outCtx, layerSet, w, h) {
+      if (!layerSet?.white) return;
+      outCtx.clearRect(0, 0, w, h);
+      outCtx.imageSmoothingEnabled = false;
+      visualGlitchIdlePhase = (visualGlitchIdlePhase + 1) % 8192;
+      const split = 1.2 + Math.sin(visualGlitchIdlePhase * 0.04) * 0.18;
+      outCtx.drawImage(layerSet.white, 0, 0, w, h);
+      if (layerSet.red && layerSet.cyan) {
+        outCtx.globalAlpha = 0.5;
+        outCtx.drawImage(layerSet.red, split, 0, w, h);
+        outCtx.drawImage(layerSet.cyan, -split, 0, w, h);
+        outCtx.globalAlpha = 1;
+      }
+      visualPerfStats.renderGlitchIdle++;
+    }
+
     function tickBgVisual() {
       ensureBgLayerCache();
+      const w = bgCanvas.width;
+      const h = bgCanvas.height;
       const onBurst = screenGlitchIntensity > 0;
       bgCtx.globalAlpha = onBurst ? 0.38 : 0.22;
-      renderGlitch(bgCtx, bgCachedLayers, bgCanvas.width, bgCanvas.height, true);
+      if (visualGlitchIdle()) {
+        renderBgIdleComposite(bgCtx, bgCachedLayers, w, h);
+      } else {
+        renderGlitch(bgCtx, bgCachedLayers, w, h, true);
+      }
       bgCtx.globalAlpha = 1;
-      paintTvNoiseOverlay(bgCtx, bgCanvas.width, bgCanvas.height, onBurst ? 1.35 : 1);
+      paintTvNoiseOverlay(bgCtx, w, h, onBurst ? 1.35 : 1);
     }
 
     function muteContentWidth(label, muted) {
@@ -3281,6 +3311,22 @@
       return `${artist}   ${song}`;
     }
 
+    const VCR_TEXT_SHADOW_BLUR = 1.15;
+
+    function applyVcrTextSoftness(bctx) {
+      bctx.shadowBlur = VCR_TEXT_SHADOW_BLUR;
+      const fs = bctx.fillStyle;
+      bctx.shadowColor = typeof fs === "string" ? fs : "rgba(205, 255, 228, 0.9)";
+      bctx.shadowOffsetX = 0;
+      bctx.shadowOffsetY = 0;
+    }
+
+    function clearVcrTextSoftness(bctx) {
+      bctx.shadowBlur = 0;
+      bctx.shadowOffsetX = 0;
+      bctx.shadowOffsetY = 0;
+    }
+
     const TITLE_MOBILE_MAX_CSS_W = 767;
     const TITLE_MOBILE_H_PAD = 16;
     const TITLE_DESKTOP_H_PAD = 24;
@@ -3393,11 +3439,13 @@
       bctx.textBaseline = "alphabetic";
       const lineH = muteTextMetrics(bctx, "Hg", fontSize, TITLE_LETTER_SPACING).height;
       const lineGap = Math.round(fontSize * 0.14);
+      applyVcrTextSoftness(bctx);
       lines.forEach((line, index) => {
         const x = centeredLineX(bctx, line, canvasWidthDev);
         const y = startY + index * (lineH + lineGap);
         bctx.fillText(line, x, y);
       });
+      clearVcrTextSoftness(bctx);
       return { lineH, lineGap };
     }
 
