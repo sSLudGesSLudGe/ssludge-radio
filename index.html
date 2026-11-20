@@ -21,8 +21,8 @@
       background-color: #000;
       background-image: radial-gradient(
         115% 88% at 50% 46%,
-        #07090c 0%,
-        #030405 52%,
+        #020202 0%,
+        #010101 48%,
         #000 100%
       );
       overflow: hidden;
@@ -38,7 +38,7 @@
       display: block;
       width: 100%;
       height: 100%;
-      opacity: 0.88;
+      opacity: 0.68;
     }
 
     body::before {
@@ -117,12 +117,12 @@
     .title-wrap canvas {
       display: block;
       pointer-events: none;
-      filter: blur(0.45px);
+      filter: blur(0.72px);
     }
 
     .vcr-dock-inner canvas,
     #scanner-tv {
-      filter: blur(0.45px);
+      filter: blur(0.72px);
     }
 
     .title-links {
@@ -2965,9 +2965,9 @@
     }
 
     const bgGlitchColors = {
-      white: "rgba(205, 255, 228, 0.14)",
-      red: "rgba(120, 185, 155, 0.05)",
-      cyan: "rgba(105, 200, 170, 0.045)"
+      white: "rgba(160, 200, 178, 0.08)",
+      red: "rgba(80, 120, 100, 0.028)",
+      cyan: "rgba(70, 120, 105, 0.024)"
     };
     const bgCanvas = document.getElementById("bg-tv");
     const bgCtx = bgCanvas.getContext("2d");
@@ -2982,7 +2982,7 @@
       const w = bgCanvas.width;
       const h = bgCanvas.height;
       if (!w || !h) return "";
-      return `${w}x${h}:v2`;
+      return `${w}x${h}:v3`;
     }
 
     function ensureBgLayerCache() {
@@ -3030,8 +3030,8 @@
       const cx = w * 0.5;
       const cy = h * 0.46;
       const g = bctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(w, h) * 0.72);
-      g.addColorStop(0, "#07090c");
-      g.addColorStop(0.52, "#030405");
+      g.addColorStop(0, "#030303");
+      g.addColorStop(0.52, "#010101");
       g.addColorStop(1, "#000000");
       bctx.fillStyle = g;
       bctx.fillRect(0, 0, w, h);
@@ -3039,7 +3039,7 @@
       const dpr = w / Math.max(1, window.innerWidth);
       const stepY = Math.max(2, Math.round(5 * dpr));
 
-      bctx.strokeStyle = "rgba(200, 218, 228, 0.003)";
+      bctx.strokeStyle = "rgba(120, 135, 145, 0.0015)";
       bctx.lineWidth = 1;
       for (let y = 0; y <= h; y += stepY) {
         bctx.beginPath();
@@ -3049,14 +3049,15 @@
       }
 
       const scanStep = Math.max(2, Math.round(4 * dpr));
-      bctx.fillStyle = "rgba(0, 0, 0, 0.12)";
+      bctx.fillStyle = "rgba(0, 0, 0, 0.2)";
       for (let y = 0; y < h; y += scanStep) {
         bctx.fillRect(0, y, w, 1);
       }
 
       const vig = bctx.createRadialGradient(cx, cy, Math.min(w, h) * 0.22, cx, cy, Math.max(w, h) * 0.75);
       vig.addColorStop(0, "rgba(0, 0, 0, 0)");
-      vig.addColorStop(1, "rgba(0, 0, 0, 0.72)");
+      vig.addColorStop(0.55, "rgba(0, 0, 0, 0.35)");
+      vig.addColorStop(1, "rgba(0, 0, 0, 0.88)");
       bctx.fillStyle = vig;
       bctx.fillRect(0, 0, w, h);
     }
@@ -3100,7 +3101,7 @@
       const oy = (tvNoiseFrame * 17) % TV_NOISE_TILE;
       ctx.save();
       ctx.globalCompositeOperation = "source-over";
-      ctx.globalAlpha = Math.min(1, 0.28 * strength);
+      ctx.globalAlpha = Math.min(1, 0.16 * strength);
       ctx.imageSmoothingEnabled = false;
       for (let x = -ox; x < w + TV_NOISE_TILE; x += TV_NOISE_TILE) {
         for (let y = -oy; y < h + TV_NOISE_TILE; y += TV_NOISE_TILE) {
@@ -3110,8 +3111,8 @@
       const sparks = Math.round((screenGlitchSoft() ? 26 : 52) * strength * (w * h) / (2560 * 1600));
       const sparkN = Math.max(8, sparks);
       for (let i = 0; i < sparkN; i++) {
-        const a = 0.006 + Math.random() * (screenGlitchSoft() ? 0.016 : 0.028);
-        ctx.fillStyle = `rgba(210, 230, 236, ${a})`;
+        const a = 0.003 + Math.random() * (screenGlitchSoft() ? 0.008 : 0.014);
+        ctx.fillStyle = `rgba(140, 155, 165, ${a})`;
         ctx.fillRect(Math.random() * w, Math.random() * h, 1, 1);
       }
       ctx.restore();
@@ -3125,7 +3126,7 @@
       const split = 1.2 + Math.sin(visualGlitchIdlePhase * 0.04) * 0.18;
       outCtx.drawImage(layerSet.white, 0, 0, w, h);
       if (layerSet.red && layerSet.cyan) {
-        outCtx.globalAlpha = 0.5;
+        outCtx.globalAlpha = 0.32;
         outCtx.drawImage(layerSet.red, split, 0, w, h);
         outCtx.drawImage(layerSet.cyan, -split, 0, w, h);
         outCtx.globalAlpha = 1;
@@ -3138,14 +3139,16 @@
       const w = bgCanvas.width;
       const h = bgCanvas.height;
       const onBurst = screenGlitchIntensity > 0;
-      bgCtx.globalAlpha = onBurst ? 0.38 : 0.22;
+      bgCtx.globalAlpha = onBurst ? 0.28 : 0.14;
       if (visualGlitchIdle()) {
         renderBgIdleComposite(bgCtx, bgCachedLayers, w, h);
       } else {
         renderGlitch(bgCtx, bgCachedLayers, w, h, true);
       }
       bgCtx.globalAlpha = 1;
-      paintTvNoiseOverlay(bgCtx, w, h, onBurst ? 1.35 : 1);
+      paintTvNoiseOverlay(bgCtx, w, h, onBurst ? 1.1 : 0.85);
+      bgCtx.fillStyle = "rgba(0, 0, 0, 0.22)";
+      bgCtx.fillRect(0, 0, w, h);
     }
 
     function muteContentWidth(label, muted) {
@@ -3311,7 +3314,7 @@
       return `${artist}   ${song}`;
     }
 
-    const VCR_TEXT_SHADOW_BLUR = 1.15;
+    const VCR_TEXT_SHADOW_BLUR = 1.75;
 
     function applyVcrTextSoftness(bctx) {
       bctx.shadowBlur = VCR_TEXT_SHADOW_BLUR;
