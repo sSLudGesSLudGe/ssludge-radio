@@ -2907,7 +2907,7 @@
       const w = bgCanvas.width;
       const h = bgCanvas.height;
       if (!w || !h) return "";
-      return `${w}x${h}:${screenGlitchSoft() ? "soft" : "hard"}`;
+      return `${w}x${h}`;
     }
 
     function ensureBgLayerCache() {
@@ -2992,30 +2992,71 @@
       vig.addColorStop(1, "rgba(0, 0, 0, 0.72)");
       bctx.fillStyle = vig;
       bctx.fillRect(0, 0, w, h);
+    }
 
-      const grain = screenGlitchSoft() ? 28 : 64;
-      for (let i = 0; i < grain; i++) {
-        const x = Math.random() * w;
-        const y = Math.random() * h;
-        const a = 0.006 + Math.random() * (screenGlitchSoft() ? 0.012 : 0.028);
-        bctx.fillStyle = `rgba(210, 230, 236, ${a})`;
-        bctx.fillRect(x, y, 1, 1);
+    const TV_NOISE_FRAMES = 16;
+    const TV_NOISE_TILE = 128;
+    let tvNoiseTiles = null;
+    let tvNoiseFrame = 0;
+    let visualGlitchIdlePhase = 0;
+
+    function ensureTvNoiseTiles() {
+      if (tvNoiseTiles) return;
+      tvNoiseTiles = [];
+      for (let f = 0; f < TV_NOISE_FRAMES; f++) {
+        const tile = document.createElement("canvas");
+        tile.width = TV_NOISE_TILE;
+        tile.height = TV_NOISE_TILE;
+        const tctx = tile.getContext("2d");
+        const img = tctx.createImageData(TV_NOISE_TILE, TV_NOISE_TILE);
+        const d = img.data;
+        for (let i = 0, p = 0; p < d.length; p += 4, i++) {
+          const n = (f * 97 + i * 13) % 256;
+          const lit = n > 238;
+          const base = lit ? 212 + (n % 36) : 18 + (n % 40);
+          d[p] = base;
+          d[p + 1] = base + (lit ? 8 : 4);
+          d[p + 2] = base + (lit ? 14 : 2);
+          d[p + 3] = lit ? 28 + (n % 55) : 10 + (n % 22);
+        }
+        tctx.putImageData(img, 0, 0);
+        tvNoiseTiles.push(tile);
       }
     }
 
-    let bgCacheGlitchSoft = null;
+    function paintTvNoiseOverlay(ctx, w, h, strength = 1) {
+      if (w < 2 || h < 2) return;
+      ensureTvNoiseTiles();
+      tvNoiseFrame = (tvNoiseFrame + 1) % TV_NOISE_FRAMES;
+      const tile = tvNoiseTiles[tvNoiseFrame];
+      const ox = (tvNoiseFrame * 11 + visualGlitchIdlePhase) % TV_NOISE_TILE;
+      const oy = (tvNoiseFrame * 17) % TV_NOISE_TILE;
+      ctx.save();
+      ctx.globalCompositeOperation = "source-over";
+      ctx.globalAlpha = Math.min(1, 0.28 * strength);
+      ctx.imageSmoothingEnabled = false;
+      for (let x = -ox; x < w + TV_NOISE_TILE; x += TV_NOISE_TILE) {
+        for (let y = -oy; y < h + TV_NOISE_TILE; y += TV_NOISE_TILE) {
+          ctx.drawImage(tile, x, y);
+        }
+      }
+      const sparks = Math.round((screenGlitchSoft() ? 26 : 52) * strength * (w * h) / (2560 * 1600));
+      const sparkN = Math.max(8, sparks);
+      for (let i = 0; i < sparkN; i++) {
+        const a = 0.006 + Math.random() * (screenGlitchSoft() ? 0.016 : 0.028);
+        ctx.fillStyle = `rgba(210, 230, 236, ${a})`;
+        ctx.fillRect(Math.random() * w, Math.random() * h, 1, 1);
+      }
+      ctx.restore();
+    }
 
     function tickBgVisual() {
-      const soft = screenGlitchSoft();
-      if (bgCacheGlitchSoft !== null && soft !== bgCacheGlitchSoft) {
-        invalidateBgLayerCache();
-      }
-      bgCacheGlitchSoft = soft;
       ensureBgLayerCache();
       const onBurst = screenGlitchIntensity > 0;
       bgCtx.globalAlpha = onBurst ? 0.38 : 0.22;
       renderGlitch(bgCtx, bgCachedLayers, bgCanvas.width, bgCanvas.height, true);
       bgCtx.globalAlpha = 1;
+      paintTvNoiseOverlay(bgCtx, bgCanvas.width, bgCanvas.height, onBurst ? 1.35 : 1);
     }
 
     function muteContentWidth(label, muted) {
@@ -3055,6 +3096,7 @@
 
     const visualPerfStats = {
       renderGlitchFast: 0,
+      renderGlitchIdle: 0,
       renderGlitchFull: 0,
       repaintBg: 0,
       repaintTitle: 0,
@@ -3066,13 +3108,63 @@
       bgCacheRebuilds: 0,
     };
 
+    function renderGlitchIdleAnim(outCtx, layerSet, w, h) {
+      if (!layerSet?.white || !layerSet?.red || !layerSet?.cyan) return;
+      outCtx.clearRect(0, 0, w, h);
+      outCtx.imageSmoothingEnabled = false;
+      visualGlitchIdlePhase = (visualGlitchIdlePhase + 1) % 8192;
+      const phase = visualGlitchIdlePhase;
+      const band = Math.max(2, Math.round((window.devicePixelRatio || 1) * 2));
+      const tearAt = ((phase * 19 + 7) % 997) / 997 * h;
+      const tearSize = h * (0.045 + ((phase % 11) / 11) * 0.04);
+      const wobble = Math.sin(phase * 0.09) * 1.4 + Math.cos(phase * 0.061) * 1.1;
+      const split = 1.1 + (phase % 9) * 0.12 + Math.sin(phase * 0.04) * 0.25;
+
+      for (let y = 0; y < h; y += band) {
+        const row = (y / band) | 0;
+        let dx = wobble + Math.sin((row + phase * 0.07) * 0.27) * 1.6;
+        if (Math.random() < 0.018) dx += (Math.random() - 0.5) * 6;
+        if (y > tearAt && y < tearAt + tearSize) dx += 2.5 + Math.sin(phase * 0.2) * 1.5;
+
+        outCtx.drawImage(layerSet.red, 0, y, w, band, dx + split, y, w, band);
+        outCtx.drawImage(layerSet.cyan, 0, y, w, band, dx - split, y, w, band);
+        outCtx.drawImage(layerSet.white, 0, y, w, band, dx, y, w, band);
+      }
+
+      outCtx.globalCompositeOperation = "source-atop";
+      outCtx.fillStyle = "rgba(0, 0, 0, 0.22)";
+      for (let y = phase % 3; y < h; y += band * 3) {
+        outCtx.fillRect(0, y, w, 1);
+      }
+
+      outCtx.globalCompositeOperation = "destination-out";
+      const cuts = 4 + (phase % 4);
+      for (let i = 0; i < cuts; i++) {
+        const rx = ((phase * 131 + i * 97) % 1000) / 1000 * w;
+        const ry = ((phase * 67 + i * 43) % 1000) / 1000 * h;
+        outCtx.fillRect(rx, ry, 3 + (i % 3) * 3, 1);
+      }
+
+      outCtx.globalCompositeOperation = "source-atop";
+      const specks = 10 + (phase % 7);
+      for (let i = 0; i < specks; i++) {
+        const bright = ((phase + i * 17) % 10) > 3;
+        outCtx.fillStyle = bright
+          ? `rgba(255, 255, 255, ${0.35 + Math.random() * 0.45})`
+          : `rgba(${160 + Math.random() * 80}, ${40 + Math.random() * 40}, 255, ${0.4 + Math.random() * 0.35})`;
+        outCtx.fillRect(Math.random() * w, (Math.random() * h) | 0, 2 + (i % 4) * 3, 1);
+      }
+
+      outCtx.globalCompositeOperation = "source-over";
+      visualPerfStats.renderGlitchIdle++;
+    }
+
     function renderGlitch(outCtx, layerSet, w, h, soft = false) {
       outCtx.clearRect(0, 0, w, h);
       outCtx.imageSmoothingEnabled = false;
 
       if (soft && visualGlitchIdle() && layerSet?.white) {
-        outCtx.drawImage(layerSet.white, 0, 0, w, h);
-        visualPerfStats.renderGlitchFast++;
+        renderGlitchIdleAnim(outCtx, layerSet, w, h);
         return;
       }
       visualPerfStats.renderGlitchFull++;
@@ -3622,6 +3714,7 @@
 
     const VIS_BG_MS = 1000 / 12;
     const VIS_HUD_MS = 1000 / 18;
+    const VIS_IDLE_RGB_MS = 1000 / 8;
     const VIS_TITLE_IDLE_MS = 1000 / 15;
     const VIS_TITLE_BURST_MS = 1000 / 30;
     const VIS_DATETIME_MS = 1000;
@@ -3636,11 +3729,24 @@
       bg: 0,
       title: 0,
       hud: 0,
+      idleRgb: 0,
       datetime: 0,
     };
 
     function visualHudAnimates() {
       return !visualGlitchIdle();
+    }
+
+    function tickHudStaticRgb() {
+      tickDockBarVisual();
+      visualPerfStats.repaintDock++;
+      tickMuteVisual();
+      visualPerfStats.repaintMute++;
+      tickSludgeVisual();
+      visualPerfStats.repaintSludge++;
+      visualDirty.dock = false;
+      visualDirty.mute = false;
+      visualDirty.sludge = false;
     }
 
     function visualSchedulerTick(now) {
@@ -3682,21 +3788,23 @@
         visualSchedulerAcc.hud %= VIS_HUD_MS;
         tickScannerVisual();
         visualPerfStats.repaintScanner++;
-        if (visualHudAnimates() || visualDirty.dock) {
-          tickDockBarVisual();
-          visualPerfStats.repaintDock++;
-          visualDirty.dock = false;
+        if (visualHudAnimates()) {
+          tickHudStaticRgb();
         }
-        if (visualHudAnimates() || visualDirty.mute) {
-          tickMuteVisual();
-          visualPerfStats.repaintMute++;
-          visualDirty.mute = false;
+      }
+
+      visualSchedulerAcc.idleRgb += dt;
+      if (
+        visualGlitchIdle() &&
+        (visualSchedulerAcc.idleRgb >= VIS_IDLE_RGB_MS ||
+          visualDirty.dock ||
+          visualDirty.mute ||
+          visualDirty.sludge)
+      ) {
+        if (visualSchedulerAcc.idleRgb >= VIS_IDLE_RGB_MS) {
+          visualSchedulerAcc.idleRgb %= VIS_IDLE_RGB_MS;
         }
-        if (visualHudAnimates() || visualDirty.sludge) {
-          tickSludgeVisual();
-          visualPerfStats.repaintSludge++;
-          visualDirty.sludge = false;
-        }
+        tickHudStaticRgb();
       }
 
       visualSchedulerAcc.datetime += dt;
